@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { isServedOverBzz } from '../ManifestManagement';
@@ -66,8 +66,47 @@ function downloadLog() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+const HEIGHT_KEY = 'msrs-debug-height';
+const DEFAULT_HEIGHT = 260;
+const MIN_HEIGHT = 90;
+
+function clampHeight(px: number): number {
+  const max = Math.round(window.innerHeight * 0.9);
+  return Math.min(Math.max(Math.round(px), MIN_HEIGHT), max);
+}
+
+function loadHeight(): number {
+  const saved = Number(localStorage.getItem(HEIGHT_KEY));
+  return clampHeight(Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_HEIGHT);
+}
+
+/** Drag the panel's top edge to resize it (mouse and touch); the height is kept across reloads. */
+function useResizeHandle(setHeight: (px: number) => void) {
+  return useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const target = e.currentTarget;
+      target.setPointerCapture(e.pointerId);
+      const onMove = (ev: PointerEvent) => setHeight(clampHeight(window.innerHeight - ev.clientY));
+      const onUp = (ev: PointerEvent) => {
+        target.releasePointerCapture(ev.pointerId);
+        target.removeEventListener('pointermove', onMove);
+        target.removeEventListener('pointerup', onUp);
+        target.removeEventListener('pointercancel', onUp);
+        localStorage.setItem(HEIGHT_KEY, String(clampHeight(window.innerHeight - ev.clientY)));
+      };
+      target.addEventListener('pointermove', onMove);
+      target.addEventListener('pointerup', onUp);
+      target.addEventListener('pointercancel', onUp);
+    },
+    [setHeight],
+  );
+}
+
 export default function DebugPanel({ mediaRef }: DebugPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [height, setHeight] = useState(loadHeight);
+  const startResize = useResizeHandle(setHeight);
   const [paused, setPaused] = useState(false);
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [copyState, setCopyState] = useState('');
@@ -117,7 +156,20 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
   };
 
   return createPortal(
-    <div className={`msrs-debug ${collapsed ? 'msrs-debug--collapsed' : ''}`} data-testid="msrs-debug-panel">
+    <div
+      className={`msrs-debug ${collapsed ? 'msrs-debug--collapsed' : ''}`}
+      style={collapsed ? undefined : { height }}
+      data-testid="msrs-debug-panel"
+    >
+      {!collapsed && (
+        <div
+          className="msrs-debug__resize"
+          onPointerDown={startResize}
+          role="separator"
+          aria-orientation="horizontal"
+          title="Drag to resize"
+        />
+      )}
       <div className="msrs-debug__bar">
         <span className="msrs-debug__badge">DEBUG BUILD</span>
         <span className="msrs-debug__commit">{commit}</span>
