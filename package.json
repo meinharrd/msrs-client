@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:analyze": "ANALYZE=true pnpm build",
+    "build:debug": "RELATIVE_BASE=true VITE_DEBUG_PANEL=true pnpm build",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

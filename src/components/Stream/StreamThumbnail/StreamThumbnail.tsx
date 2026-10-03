@@ -2,14 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { MediaType, StateType } from '@/types/stream';
+import { publicAsset } from '@/utils/shared/publicAsset';
 import { formatDuration } from '@/utils/ui/format';
 
 import { thumbnailCache } from './thumbnailCache';
 
 import './StreamThumbnail.scss';
 
-const PlayIcon = '/assets/icons/playIcon.png';
-const AudioStreamImage = '/assets/images/audioStream.png';
+const PlayIcon = publicAsset('/assets/icons/playIcon.png');
+const AudioStreamImage = publicAsset('/assets/images/audioStream.png');
 
 interface StreamThumbnailProps {
   title: string;

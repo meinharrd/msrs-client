@@ -1,5 +1,6 @@
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import react from '@vitejs/plugin-react-swc';
+import { execSync } from 'child_process';
 import path from 'path';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { fileURLToPath } from 'url';
@@ -13,6 +14,19 @@ export default defineConfig(({ mode }) => {
   // eslint-disable-next-line no-undef
   const env = loadEnv(mode, process.cwd(), '');
 
+  // RELATIVE_BASE=true emits relative asset URLs so the build works under a sub-path or a Swarm root.
+  const relativeBase = env.RELATIVE_BASE === 'true';
+  // VITE_DEBUG_PANEL=true turns on the segment debug panel; the commit is shown in its header.
+  const debugPanel = env.VITE_DEBUG_PANEL === 'true';
+  let gitCommit = env.VITE_GIT_COMMIT || '';
+  if (debugPanel && !gitCommit) {
+    try {
+      gitCommit = execSync('git rev-parse --short HEAD').toString().trim();
+    } catch {
+      gitCommit = 'unknown';
+    }
+  }
+
   const htmlPlugin = () => {
     return {
       name: 'html-transform',
@@ -23,6 +37,8 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
+    base: relativeBase ? './' : '/',
+    ...(debugPanel && { define: { 'import.meta.env.VITE_GIT_COMMIT': JSON.stringify(gitCommit) } }),
     server: {
       host: true,
       port: 5175,

@@ -1,0 +1,159 @@
+// Self-contained styles for the debug build's segment panel. Docked to the bottom of the viewport.
+
+.msrs-debug {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  max-height: 45vh;
+  background: rgba(10, 12, 16, 0.94);
+  color: #d8dee9;
+  border-top: 2px solid #f59e0b;
+  font: 12px/1.35 ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
+
+  b {
+    color: #fff;
+  }
+
+  .bad {
+    color: #f87171;
+  }
+
+  button {
+    font: inherit;
+    color: #e5e7eb;
+    background: #1f2937;
+    border: 1px solid #4b5563;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+
+    &.on {
+      background: #92400e;
+    }
+  }
+
+  label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+}
+
+.msrs-debug--collapsed {
+  max-height: none;
+}
+
+.msrs-debug__bar,
+.msrs-debug__summary,
+.msrs-debug__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 4px 8px;
+}
+
+.msrs-debug__bar {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.msrs-debug__badge {
+  background: #f59e0b;
+  color: #111;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.msrs-debug__commit {
+  color: #fbbf24;
+}
+
+.msrs-debug__spacer {
+  flex: 1;
+}
+
+.msrs-debug__summary {
+  border-bottom: 1px solid #374151;
+}
+
+.msrs-debug__note {
+  color: #9ca3af;
+}
+
+.msrs-debug__table-wrap {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.msrs-debug__table {
+  border-collapse: collapse;
+  width: 100%;
+  white-space: nowrap;
+
+  th {
+    position: sticky;
+    top: 0;
+    background: #111827;
+    color: #9ca3af;
+    text-align: left;
+    font-weight: 600;
+  }
+
+  th,
+  td {
+    padding: 1px 8px 1px 0;
+    &:first-child {
+      padding-left: 8px;
+    }
+  }
+
+  tr:nth-child(even) td {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  tr.slow td {
+    background: rgba(245, 158, 11, 0.22);
+    color: #fde68a;
+  }
+
+  tr.err td {
+    background: rgba(239, 68, 68, 0.25);
+    color: #fecaca;
+  }
+
+  tr.aborted td {
+    color: #a78bfa;
+  }
+
+  tr.msrs-debug__manifest td {
+    color: #93c5fd;
+  }
+
+  tr.msrs-debug__marker td {
+    color: #9ca3af;
+    font-style: italic;
+  }
+}
+
+@media (max-width: 600px) {
+  .msrs-debug {
+    font-size: 11px;
+    max-height: 55vh;
+  }
+
+  .msrs-debug__bar,
+  .msrs-debug__summary,
+  .msrs-debug__controls {
+    gap: 2px 10px;
+    padding: 3px 6px;
+  }
+}

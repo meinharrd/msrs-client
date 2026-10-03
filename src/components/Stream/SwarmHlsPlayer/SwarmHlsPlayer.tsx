@@ -1,14 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { Topic } from '@ethersphere/bee-js';
 import Hls, { ErrorDetails, ErrorTypes, Events, FetchLoader } from 'hls.js';
 
 import { InputLoading } from '@/components/InputLoading/InputLoading';
 import { MediaType, StateType } from '@/types/stream';
 
+import { attachHlsDebug } from './debug/attachHlsDebug';
+import { DEBUG_PANEL_ENABLED } from './debug/debugLog';
 import { clearStreamMetadata, CustomManifestLoader, setStreamMetadata } from './CustomManifestLoader';
 import { isServedOverBzz } from './ManifestManagement';
 
 import './SwarmHlsPlayer.scss';
+
+// Debug build only (VITE_DEBUG_PANEL=true): segment/playlist timing panel, kept out of normal bundles.
+const DebugPanel = DEBUG_PANEL_ENABLED ? React.lazy(() => import('./debug/DebugPanel')) : null;
 
 interface HlsPlayerProps extends React.VideoHTMLAttributes<HTMLVideoElement> {
   owner: string;
@@ -56,6 +61,7 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
 
     setIsReady(false);
     let hls: Hls | null = null;
+    let detachDebug: (() => void) | null = null;
 
     if (Hls.isSupported()) {
       hls = new Hls({
@@ -128,6 +134,8 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
         }
       });
 
+      if (DEBUG_PANEL_ENABLED) detachDebug = attachHlsDebug(hls, video, `${owner}/${topic}`);
+
       hls.attachMedia(video);
       hls.loadSource(`${owner}/${topic}`);
 
@@ -149,6 +157,7 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
     return () => {
       const hexTopic = Topic.fromString(topic).toString();
       clearStreamMetadata(hexTopic);
+      detachDebug?.();
 
       if (hls) {
         hls.destroy();
@@ -168,6 +177,11 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
 
   return (
     <>
+      {DebugPanel && (
+        <Suspense fallback={null}>
+          <DebugPanel mediaRef={videoRef} />
+        </Suspense>
+      )}
       {!isReady && (
         <div className="swarm-hls-player-loading">
           <InputLoading />

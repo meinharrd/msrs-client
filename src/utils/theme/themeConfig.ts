@@ -1,3 +1,5 @@
+import { publicAsset } from '@/utils/shared/publicAsset';
+
 export interface ThemeConfig {
   name: ThemeName;
   displayName: string;
@@ -32,23 +34,23 @@ export const AVAILABLE_THEMES: Record<ThemeName, ThemeConfig> = {
     displayName: 'SolarPunk',
     description: 'Original purple-to-orange gradient theme',
     primaryColor: '#fe8950',
-    logoPath: '/assets/themes/solarpunk/logo.png',
+    logoPath: publicAsset('/assets/themes/solarpunk/logo.png'),
   },
   [THEME_NAMES.CRYPTOMONDAYS]: {
     name: THEME_NAMES.CRYPTOMONDAYS,
     displayName: 'CryptoMondays',
     description: 'Modern blue theme for CryptoMondays partnership',
     primaryColor: '#377dff',
-    logoPath: '/assets/themes/cryptomondays/logo.svg',
-    logoIconPath: '/assets/themes/cryptomondays/logo-icon.svg',
-    logoOnDarkPath: '/assets/themes/cryptomondays/logo-on-black.svg',
+    logoPath: publicAsset('/assets/themes/cryptomondays/logo.svg'),
+    logoIconPath: publicAsset('/assets/themes/cryptomondays/logo-icon.svg'),
+    logoOnDarkPath: publicAsset('/assets/themes/cryptomondays/logo-on-black.svg'),
   },
   [THEME_NAMES.SWARM]: {
     name: THEME_NAMES.SWARM,
     displayName: 'Swarm',
     description: 'Ethereum Swarm Foundation theme with brand orange and video background',
     primaryColor: '#f47a20',
-    logoPath: '/assets/themes/swarm/logo.svg',
+    logoPath: publicAsset('/assets/themes/swarm/logo.svg'),
     showFooter: true,
     groupStreamsBySchedule: true,
     heroTitle: 'Stream over Swarm',
@@ -60,7 +62,7 @@ export const AVAILABLE_THEMES: Record<ThemeName, ThemeConfig> = {
     displayName: 'Ethis',
     description: 'Ethis theme (Swarm brand styling with the Ethereum logo)',
     primaryColor: '#f47a20',
-    logoPath: '/assets/themes/ethis/logo.png',
+    logoPath: publicAsset('/assets/themes/ethis/logo.png'),
     showFooter: true,
   },
 };

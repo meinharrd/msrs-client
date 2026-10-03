@@ -13,7 +13,7 @@
       href="https://fonts.googleapis.com/css2?family=Vend+Sans:wght@300..700&family=Geist:wght@300..700&family=JetBrains+Mono:wght@400..700&display=swap"
     />
 
-    <script src="/config.js"></script>
+    <script src="%BASE_URL%config.js"></script>
     <script>
       // Theme detection - runs before React to prevent flash
       (function () {
@@ -39,22 +39,22 @@
         const themeConfig = {
           solarpunk: {
             title: 'Multimedia Streaming over Swarm',
-            favicon: '/assets/themes/solarpunk/favicon.png',
+            favicon: '%BASE_URL%assets/themes/solarpunk/favicon.png',
             loadingGradient: 'linear-gradient(180deg, #8841e4 0%, #ff8a50 100%)',
           },
           cryptomondays: {
             title: 'CryptoMondays Streaming',
-            favicon: '/assets/themes/cryptomondays/logo-icon.svg',
+            favicon: '%BASE_URL%assets/themes/cryptomondays/logo-icon.svg',
             loadingGradient: 'linear-gradient(180deg, rgba(0, 0, 0, 0.85) 0%, rgba(8, 4, 27, 0.95) 100%)',
           },
           swarm: {
             title: 'Swarm Streaming',
-            favicon: '/assets/themes/swarm/favicon.png',
+            favicon: '%BASE_URL%assets/themes/swarm/favicon.png',
             loadingGradient: 'linear-gradient(180deg, #151517 0%, #1b1b1c 100%)',
           },
           ethis: {
             title: 'Ethis Streaming',
-            favicon: '/assets/themes/ethis/favicon.png',
+            favicon: '%BASE_URL%assets/themes/ethis/favicon.png',
             loadingGradient: 'linear-gradient(180deg, #151517 0%, #1b1b1c 100%)',
           },
         };

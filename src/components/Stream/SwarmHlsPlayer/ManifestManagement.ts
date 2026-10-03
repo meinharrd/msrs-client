@@ -5,6 +5,8 @@ import { StateType } from '@/types/stream';
 import { makeFeedIdentifier } from '@/utils/network/bee';
 import { config } from '@/utils/shared/config';
 
+import { traceManifestApplied, traceManifestFetch } from './debug/debugLog';
+
 interface TopicState {
   index: FeedIndex | null;
   manifest: string;
@@ -211,10 +213,10 @@ export class ManifestFetcher {
     if (streamMetadata?.isExternal) {
       const externalIndex = FeedIndex.fromBigInt(BigInt(streamMetadata.index ?? EXTERNAL_DEFAULT_INDEX));
       const socId = makeFeedIdentifier(topic, externalIndex).toString();
-      const res = await this.fetchResource(`soc/${owner}/${socId}`);
+      const res = await this.fetchResource(`soc/${owner}/${socId}`, { index: externalIndex });
       const manifest = await res.text();
 
-      const hasChanged = this.stateManager.updateManifest(hexTopic, manifest);
+      const hasChanged = this.applyManifest(hexTopic, manifest, res);
       if (hasChanged) {
         this.stateManager.setIndex(hexTopic, externalIndex);
       }
@@ -229,10 +231,10 @@ export class ManifestFetcher {
       const socId = makeFeedIdentifier(topic, vodIndex).toString();
 
       try {
-        const res = await this.fetchResource(`soc/${owner}/${socId}`);
+        const res = await this.fetchResource(`soc/${owner}/${socId}`, { index: vodIndex });
         const manifest = await res.text();
 
-        const hasChanged = this.stateManager.updateManifest(hexTopic, manifest);
+        const hasChanged = this.applyManifest(hexTopic, manifest, res);
         if (hasChanged) {
           this.stateManager.setIndex(hexTopic, vodIndex);
         }
@@ -255,7 +257,7 @@ export class ManifestFetcher {
       });
       const manifest = await res.text();
 
-      const hasChanged = this.stateManager.updateManifest(hexTopic, manifest);
+      const hasChanged = this.applyManifest(hexTopic, manifest, res);
       if (hasChanged) {
         const index = this.extractIndex(res);
         this.stateManager.setIndex(hexTopic, index);
@@ -267,10 +269,10 @@ export class ManifestFetcher {
 
       const index1 = FeedIndex.fromBigInt(BigInt(1));
       const socId = makeFeedIdentifier(topic, index1).toString();
-      const res = await this.fetchResource(`soc/${owner}/${socId}`);
+      const res = await this.fetchResource(`soc/${owner}/${socId}`, { index: index1 });
       const manifest = await res.text();
 
-      const hasChanged = this.stateManager.updateManifest(hexTopic, manifest);
+      const hasChanged = this.applyManifest(hexTopic, manifest, res);
       if (hasChanged) {
         this.stateManager.setIndex(hexTopic, index1);
       }
@@ -282,12 +284,13 @@ export class ManifestFetcher {
   private async handleFollowupFetch(owner: string, topic: Topic): Promise<string> {
     const nextId = this.generateNextId(topic);
     const hexTopic = topic.toString();
+    const nextIndex = this.stateManager.getIndex(hexTopic)!.next();
 
-    this.fetchResource(`soc/${owner}/${nextId}`, { abortEnabled: true, timeout: 6000 })
+    this.fetchResource(`soc/${owner}/${nextId}`, { abortEnabled: true, timeout: 6000, index: nextIndex })
       .then((res) => {
         manifestQueue.add(async () => {
           const manifest = await res.text();
-          const hasChanged = this.stateManager.updateManifest(hexTopic, manifest);
+          const hasChanged = this.applyManifest(hexTopic, manifest, res);
           if (hasChanged) {
             const index = this.stateManager.getIndex(hexTopic)!;
             this.stateManager.setIndex(hexTopic, index.next());
@@ -301,6 +304,14 @@ export class ManifestFetcher {
     return this.stateManager.getLatestManifest(hexTopic);
   }
 
+  /** stateManager.updateManifest, plus a note for the debug panel on whether the stored playlist changed. */
+  private applyManifest(hexTopic: string, manifest: string, res: Response): boolean {
+    const before = this.stateManager.getLatestManifest(hexTopic);
+    const result = this.stateManager.updateManifest(hexTopic, manifest);
+    traceManifestApplied(res, manifest, this.stateManager.getLatestManifest(hexTopic) !== before);
+    return result;
+  }
+
   private generateNextId(topic: Topic): string {
     const currentIndex = this.stateManager.getIndex(topic.toString())!;
     const nextId = makeFeedIdentifier(topic, currentIndex.next());
@@ -309,19 +320,23 @@ export class ManifestFetcher {
 
   private async fetchResource(
     path: string,
-    options?: { abortEnabled?: boolean; timeout?: number; cache?: RequestCache },
+    options?: { abortEnabled?: boolean; timeout?: number; cache?: RequestCache; index?: FeedIndex },
   ): Promise<Response> {
     const { abortEnabled = false, timeout = 8500, cache } = options ?? {};
+    const url = `${this.baseUrl}/${path}`;
+    const startedAt = performance.now();
+    const index = options?.index?.toBigInt().toString();
     const controller = abortEnabled ? new AbortController() : null;
     const timeoutId = abortEnabled ? setTimeout(() => controller?.abort(), timeout) : null;
 
     try {
-      const response = await fetch(`${this.baseUrl}/${path}`, {
+      const response = await fetch(url, {
         signal: controller?.signal,
         cache,
       });
 
       if (timeoutId) clearTimeout(timeoutId);
+      traceManifestFetch(url, path, startedAt, { response, index });
 
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${path}`);
@@ -330,6 +345,9 @@ export class ManifestFetcher {
       return response;
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
+      if (!(error instanceof Error && error.message.startsWith('Failed to fetch: '))) {
+        traceManifestFetch(url, path, startedAt, { error, index });
+      }
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(`Request timeout: ${path}`);
       }

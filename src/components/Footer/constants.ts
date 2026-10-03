@@ -1,3 +1,5 @@
+import { publicAsset } from '@/utils/shared/publicAsset';
+
 export interface FooterLink {
   label: string;
   href: string;
@@ -31,5 +33,5 @@ export const RESOURCES_LINKS: FooterLink[] = [
   { label: 'Etherjot', href: 'https://etherjot.eth.limo/' },
 ];
 
-export const SWARM_LOGO_PATH = '/assets/themes/swarm/logo.svg';
+export const SWARM_LOGO_PATH = publicAsset('/assets/themes/swarm/logo.svg');
 export const NEWSLETTER_FORM_ACTION = 'https://mautic.ethswarm.org/index.php/form/submit?formId=4';
