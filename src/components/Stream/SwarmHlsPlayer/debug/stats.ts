@@ -1,5 +1,7 @@
 // Pure helpers for the debug panel: classification of segment URLs and the summary maths.
 
+import { refFromVirtualBzzHost } from '../browserNode';
+
 export type SourceKind = 'bzz' | 'gateway' | 'other';
 
 export interface SourceInfo {
@@ -22,6 +24,8 @@ export function classifySource(url: string): SourceInfo {
   const ref = bytes ? bytes[1].toLowerCase() : null;
   try {
     const parsed = new URL(url);
+    const virtualRef = refFromVirtualBzzHost(parsed.hostname);
+    if (virtualRef) return { kind: 'bzz', host: 'freedom virtual origin', ref: virtualRef };
     if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
       return { kind: 'gateway', host: parsed.host, ref };
     }

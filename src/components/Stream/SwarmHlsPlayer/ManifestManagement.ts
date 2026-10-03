@@ -6,6 +6,7 @@ import { makeFeedIdentifier } from '@/utils/network/bee';
 import { config } from '@/utils/shared/config';
 
 import { traceManifestApplied, traceManifestFetch } from './debug/debugLog';
+import { BrowserNodeMode, browserNodeMode, segmentUrlFor } from './browserNode';
 
 interface TopicState {
   index: FeedIndex | null;
@@ -23,21 +24,25 @@ const EXTERNAL_DEFAULT_INDEX = 1;
 // A segment line naming a gateway's `/bytes/<ref>`, with a plain (64 hex) or encrypted (128 hex) reference.
 const GATEWAY_SEGMENT_LINE = /^https?:\/\/\S*\/bytes\/([0-9a-f]{64}(?:[0-9a-f]{64})?)\/?$/i;
 
-/** True when the page itself was loaded over `bzz:`, which means a browser with its own Swarm node (Freedom). */
+/**
+ * True when the page runs in a browser with its own Swarm node: Freedom desktop (`bzz:` pages) or Freedom
+ * Android (pages on `*.bzz.freedom.baby` / `*.ens.freedom.baby` virtual origins).
+ */
 export function isServedOverBzz(): boolean {
-  return typeof window !== 'undefined' && window.location.protocol === 'bzz:';
+  return browserNodeMode() !== null;
 }
 
 /**
  * Point every segment at `bzz://<ref>/` so the browser's own node serves it rather than the gateway the
  * streamer wrote into the manifest (issue #32). Header and tag lines pass through unchanged.
  */
-export function toBzzSegmentUrls(manifest: string): string {
+export function toBzzSegmentUrls(manifest: string, mode: BrowserNodeMode | null = browserNodeMode()): string {
+  const to = mode ?? 'bzz-scheme';
   return manifest
     .split('\n')
     .map((line) => {
       const match = GATEWAY_SEGMENT_LINE.exec(line.trim());
-      return match ? `bzz://${match[1].toLowerCase()}/` : line;
+      return match ? segmentUrlFor(match[1], to) : line;
     })
     .join('\n');
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { isServedOverBzz } from '../ManifestManagement';
+import { browserNodeMode } from '../browserNode';
 
 import { debugLog, FragEntry, LogEntry, MAX_LOG_ENTRIES } from './debugLog';
 import { bufferedAhead, shortRef, summarizeFrags, throughputMbps } from './stats';
@@ -148,7 +148,13 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
   const ttffPlayer = session?.firstPlayingAt ? session.firstPlayingAt - session.startedAt : null;
   const ttffPage = session?.firstPlayingAt ? session.firstPlayingAt - performance.timeOrigin : null;
   const commit = import.meta.env.VITE_GIT_COMMIT ?? 'unknown';
-  const mode = isServedOverBzz() ? 'bzz:// (local node)' : 'gateway https';
+  const nodeMode = browserNodeMode();
+  const mode =
+    nodeMode === 'bzz-scheme'
+      ? 'bzz:// (local node)'
+      : nodeMode === 'freedom-virtual-origin'
+      ? 'local node (Freedom Android virtual origin)'
+      : 'gateway https';
 
   const onCopy = async () => {
     setCopyState((await copyLog()) ? 'copied' : 'copy failed');
@@ -309,7 +315,15 @@ function Row({ entry: e, sessionStart }: { entry: LogEntry; sessionStart: number
       <td>{e.sn}</td>
       <td>{e.level}</td>
       <td className="mono">{shortRef(e.ref)}</td>
-      <td>{e.source === 'bzz' ? 'bzz://' : e.source === 'gateway' ? `https ${e.host}` : 'other'}</td>
+      <td>
+        {e.source === 'bzz'
+          ? e.host
+            ? 'local (virtual)'
+            : 'bzz://'
+          : e.source === 'gateway'
+          ? `https ${e.host}`
+          : 'other'}
+      </td>
       <td>{start}</td>
       <td>{fmtMs(e.ttfbMs)}</td>
       <td>{fmtMs(e.loadMs)}</td>
