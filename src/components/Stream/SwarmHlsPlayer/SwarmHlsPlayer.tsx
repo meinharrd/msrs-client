@@ -12,6 +12,8 @@ import { isServedOverBzz } from './ManifestManagement';
 
 import './SwarmHlsPlayer.scss';
 
+const MAX_IN_PLACE_RECOVERIES = 3;
+
 // Debug build only (VITE_DEBUG_PANEL=true): segment/playlist timing panel, kept out of normal bundles.
 const DebugPanel = DEBUG_PANEL_ENABLED ? React.lazy(() => import('./debug/DebugPanel')) : null;
 
@@ -40,10 +42,13 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
   const [isReady, setIsReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const retryCountRef = useRef(0);
+  // Where a VOD was playing, so a rebuilt player (restartStream) picks up there instead of at 0:00.
+  const resumeAtRef = useRef<number | null>(null);
   const MAX_RETRIES = 3;
 
   useEffect(() => {
     retryCountRef.current = 0;
+    resumeAtRef.current = null;
     setHasFatalError(false);
     setIsReady(false);
   }, [owner, topic]);
@@ -63,6 +68,12 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
     let hls: Hls | null = null;
     let detachDebug: (() => void) | null = null;
 
+    const isVod = streamState === StateType.VOD || !!isExternal;
+    const resumeAt = isVod ? resumeAtRef.current : null;
+    let onPause: (() => void) | null = null;
+    let onPlay: (() => void) | null = null;
+    let onPosition: (() => void) | null = null;
+
     if (Hls.isSupported()) {
       hls = new Hls({
         pLoader: CustomManifestLoader,
@@ -74,6 +85,7 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
         maxMaxBufferLength: 120,
         maxBufferSize: 60 * 1024 * 1024, // 60MB
         maxBufferHole: 1,
+        ...(resumeAt !== null && { startPosition: resumeAt }),
       });
 
       const restartStream = () => {
@@ -91,12 +103,34 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
         setRestartTrigger((prev) => prev + 1);
       };
 
-      video.addEventListener('pause', () => {
+      // Pausing stops segment loading and playing resumes it, but only when a pause stopped it: an
+      // unconditional startLoad() restarts loading and aborts the segment in flight, which on autoplay
+      // is the very first one.
+      let stoppedByPause = false;
+      onPause = () => {
         hls?.stopLoad();
-      });
+        stoppedByPause = true;
+      };
+      onPlay = () => {
+        if (!stoppedByPause) return;
+        stoppedByPause = false;
+        hls?.startLoad(video.currentTime);
+      };
+      // Seeking counts too: a seek whose segments never arrive should resume at its target.
+      onPosition = () => {
+        if (isVod && video.currentTime > 0) resumeAtRef.current = video.currentTime;
+      };
+      video.addEventListener('pause', onPause);
+      video.addEventListener('play', onPlay);
+      video.addEventListener('timeupdate', onPosition);
+      video.addEventListener('seeking', onPosition);
 
-      video.addEventListener('play', () => {
-        hls?.startLoad();
+      // A segment hls.js gave up on (its own retries spent, e.g. the node was slow to find it right after
+      // a seek) is retried in place from where playback is, a few times in a row, before the player is
+      // rebuilt. Rebuilding drops the buffer, and a VOD used to restart from 0:00.
+      let inPlaceRecoveries = 0;
+      hls.on(Events.FRAG_LOADED, () => {
+        inPlaceRecoveries = 0;
       });
 
       hls.on(Events.ERROR, (_event, data) => {
@@ -119,6 +153,14 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
 
           switch (data.type) {
             case ErrorTypes.NETWORK_ERROR:
+              if (data.frag && inPlaceRecoveries < MAX_IN_PLACE_RECOVERIES) {
+                inPlaceRecoveries += 1;
+                console.warn(
+                  `Fatal segment load error, retrying in place (${inPlaceRecoveries}/${MAX_IN_PLACE_RECOVERIES})`,
+                );
+                hls?.startLoad(video.currentTime);
+                break;
+              }
               console.warn('Fatal network error');
               restartStream();
               break;
@@ -158,6 +200,12 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
       const hexTopic = Topic.fromString(topic).toString();
       clearStreamMetadata(hexTopic);
       detachDebug?.();
+      if (onPause) video.removeEventListener('pause', onPause);
+      if (onPlay) video.removeEventListener('play', onPlay);
+      if (onPosition) {
+        video.removeEventListener('timeupdate', onPosition);
+        video.removeEventListener('seeking', onPosition);
+      }
 
       if (hls) {
         hls.destroy();
