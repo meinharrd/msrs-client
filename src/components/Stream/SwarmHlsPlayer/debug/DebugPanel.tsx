@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { browserNodeMode } from '../browserNode';
 
 import { debugLog, FragEntry, LogEntry, MAX_LOG_ENTRIES } from './debugLog';
-import { bufferedAhead, shortRef, summarizeFrags, throughputMbps } from './stats';
+import { bufferedAhead, median, shortRef, summarizeFrags, throughputMbps } from './stats';
 
 import './DebugPanel.scss';
 
@@ -207,6 +207,13 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
             </span>
             <span>
               stalls <b className={session?.stalls ? 'bad' : ''}>{session?.stalls ?? 0}</b> / {fmtSec(stallMs)}
+            </span>
+            <span>
+              seeks <b>{session?.seeks ?? 0}</b> · to playing med/max{' '}
+              <b>{fmtMs(median(session?.seekLatenciesMs ?? []))}</b>/
+              <b>{session?.seekLatenciesMs.length ? fmtMs(Math.max(...session.seekLatenciesMs)) : '-'}</b> ms
+              {session?.seekStartedAt ? ` · seeking ${fmtSec(Date.now() - session.seekStartedAt)}` : ''}
+              {session?.seeksSuperseded ? ` · ${session.seeksSuperseded} superseded` : ''}
             </span>
             <span>
               level <b>{session?.currentLevel ?? '-'}</b>

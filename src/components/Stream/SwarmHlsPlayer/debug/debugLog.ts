@@ -72,6 +72,15 @@ export interface SessionState {
   stalls: number;
   stallTotalMs: number;
   stallStartedAt: number | null;
+  /** Seeks the user made; a seek ends when playback moves again, or when the next seek supersedes it. */
+  seeks: number;
+  /** seek → playing latency of every completed seek, in ms. */
+  seekLatenciesMs: number[];
+  /** Seeks superseded by another seek before they played (scrubbing). */
+  seeksSuperseded: number;
+  /** Open seek: when it started and its target time. */
+  seekStartedAt: number | null;
+  seekTarget: number | null;
   currentLevel: number;
   levels: { height?: number; bitrate?: number }[];
   url: string;
@@ -108,6 +117,11 @@ class DebugLog {
       stalls: 0,
       stallTotalMs: 0,
       stallStartedAt: null,
+      seeks: 0,
+      seekLatenciesMs: [],
+      seeksSuperseded: 0,
+      seekStartedAt: null,
+      seekTarget: null,
       currentLevel: -1,
       levels: [],
       url,
@@ -146,6 +160,9 @@ class DebugLog {
     if (this.session) {
       this.session.stalls = 0;
       this.session.stallTotalMs = 0;
+      this.session.seeks = 0;
+      this.session.seekLatenciesMs = [];
+      this.session.seeksSuperseded = 0;
     }
     this.touch();
   }

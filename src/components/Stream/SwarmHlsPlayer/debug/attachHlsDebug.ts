@@ -146,8 +146,35 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
   };
 
   let lastTime = 0;
+
+  // Seek markers: "seek → T" when it starts, "seek played after N ms" once playback moves again.
+  const endSeek = () => {
+    if (session.seekStartedAt === null || media.paused || media.seeking) return;
+    const ms = Date.now() - session.seekStartedAt;
+    session.seekLatenciesMs.push(ms);
+    debugLog.marker(`seek to ${session.seekTarget?.toFixed(1)}s played after ${ms} ms`);
+    session.seekStartedAt = null;
+    session.seekTarget = null;
+  };
+
+  const onSeeking = () => {
+    if (session.seekStartedAt !== null) {
+      session.seeksSuperseded++;
+      debugLog.marker(
+        `seek to ${session.seekTarget?.toFixed(1)}s superseded after ${Date.now() - session.seekStartedAt} ms`,
+      );
+    }
+    session.seeks++;
+    session.seekStartedAt = Date.now();
+    session.seekTarget = media.currentTime;
+    debugLog.marker(`seek → ${media.currentTime.toFixed(1)}s (from ${lastTime.toFixed(1)}s)`);
+  };
+
   const onTimeUpdate = () => {
     if (session.stallStartedAt !== null && media.currentTime > lastTime + 0.1) endStall();
+    if (session.seekStartedAt !== null && session.seekTarget !== null && media.currentTime > session.seekTarget + 0.1) {
+      endSeek();
+    }
     lastTime = media.currentTime;
   };
 
@@ -159,6 +186,9 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
   hls.on(Events.MANIFEST_PARSED, onManifestParsed);
   media.addEventListener('playing', onPlaying);
   media.addEventListener('timeupdate', onTimeUpdate);
+  media.addEventListener('seeking', onSeeking);
+  // Lets scripted runs (Playwright) read the log and hook hls.js events. Debug builds only.
+  (window as unknown as { __msrsDebug?: unknown }).__msrsDebug = { hls, media, log: debugLog };
 
   return () => {
     clearInterval(sweepTimer);
@@ -171,6 +201,7 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
     hls.off(Events.MANIFEST_PARSED, onManifestParsed);
     media.removeEventListener('playing', onPlaying);
     media.removeEventListener('timeupdate', onTimeUpdate);
+    media.removeEventListener('seeking', onSeeking);
     // Requests still open when the player goes away will never complete.
     for (const { entry } of open.values()) {
       entry.status = 'aborted';
