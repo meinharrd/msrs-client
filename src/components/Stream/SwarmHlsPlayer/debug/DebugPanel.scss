@@ -165,11 +165,185 @@
     color: #9ca3af;
     font-style: italic;
   }
+
+  tr.msrs-debug__marker.prebuf td {
+    color: #fcd34d;
+  }
+}
+
+// ---- Buffer-ahead readout (header row) ----
+
+$buf-red: #ef4444;
+$buf-amber: #f59e0b;
+$buf-green: #22c55e;
+
+.msrs-debug__buf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+
+  &.lvl-low {
+    --buf-color: #{$buf-red};
+  }
+  &.lvl-under-target {
+    --buf-color: #{$buf-amber};
+  }
+  &.lvl-ok {
+    --buf-color: #{$buf-green};
+  }
+}
+
+.msrs-debug__buf-num {
+  font-size: 16px;
+  white-space: nowrap;
+
+  b {
+    font-size: 20px;
+    color: var(--buf-color);
+    display: inline-block;
+    min-width: 3.2ch;
+    text-align: right;
+  }
+}
+
+.msrs-debug__buf-bar {
+  position: relative;
+  width: 160px;
+  height: 12px;
+  border-radius: 3px;
+  background: #1f2937;
+  border: 1px solid #4b5563;
+  overflow: hidden;
+  flex: 0 1 160px;
+  min-width: 60px;
+}
+
+.msrs-debug__buf-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--buf-color);
+  transition: width 0.2s linear;
+}
+
+.msrs-debug__buf-target {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  box-shadow: 0 0 0 1px #111;
+}
+
+.msrs-debug__buf-scale {
+  position: absolute;
+  right: 3px;
+  top: -1px;
+  font-size: 9px;
+  color: #9ca3af;
+}
+
+.msrs-debug__spark {
+  flex: 0 0 auto;
+  background: #111827;
+  border: 1px solid #374151;
+  border-radius: 3px;
+
+  .line {
+    fill: none;
+    stroke: #e5e7eb;
+    stroke-width: 1.2;
+  }
+  .target {
+    stroke: #fff;
+    stroke-opacity: 0.45;
+    stroke-dasharray: 2 2;
+  }
+  .stall {
+    fill: $buf-red;
+    fill-opacity: 0.55;
+  }
+  .held {
+    fill: $buf-amber;
+    fill-opacity: 0.3;
+  }
+}
+
+.msrs-debug__target {
+  width: 3.5em;
+  font: inherit;
+  color: #fff;
+  background: #1f2937;
+  border: 1px solid #4b5563;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+// "Buffering 3.2 / 6 s" over the video while pre-buffering holds playback.
+.msrs-prebuffer-overlay {
+  position: fixed;
+  z-index: 9999;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid #f59e0b;
+  color: #fff;
+  font: 600 18px/1.3 ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  text-align: center;
+  white-space: nowrap;
+
+  small {
+    display: block;
+    font-size: 11px;
+    font-weight: 400;
+    color: #fcd34d;
+  }
+}
+
+// Phones: a bigger grab target and grip. The hit area is centred and narrower than the panel, so the video's
+// controls at the left and right edges above it stay tappable; the panel gets top padding to make room.
+@media (pointer: coarse), (max-width: 600px) {
+  .msrs-debug:not(.msrs-debug--collapsed) {
+    padding-top: 16px;
+  }
+
+  .msrs-debug__resize {
+    top: -14px;
+    height: 40px;
+    left: 50%;
+    right: auto;
+    width: min(240px, 60%);
+    transform: translateX(-50%);
+
+    &::after {
+      top: 17px;
+      width: 64px;
+      height: 6px;
+      margin-left: -32px;
+      border-radius: 3px;
+      background: #fbbf24;
+      box-shadow:
+        0 0 0 2px #111,
+        0 0 0 3px rgba(251, 191, 36, 0.5);
+    }
+  }
 }
 
 @media (max-width: 600px) {
   .msrs-debug {
     font-size: 11px;
+  }
+
+  // The readout gets its own full-width line at the top of the header.
+  .msrs-debug__buf {
+    flex: 1 1 100%;
+  }
+
+  .msrs-debug__buf-bar {
+    flex: 1 1 auto;
   }
 
   .msrs-debug__bar,

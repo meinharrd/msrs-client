@@ -7,6 +7,7 @@ import { MediaType, StateType } from '@/types/stream';
 
 import { attachHlsDebug } from './debug/attachHlsDebug';
 import { DEBUG_PANEL_ENABLED } from './debug/debugLog';
+import { attachPrebufferGate } from './debug/prebufferGate';
 import { clearStreamMetadata, CustomManifestLoader, setStreamMetadata } from './CustomManifestLoader';
 import { isServedOverBzz } from './ManifestManagement';
 
@@ -176,7 +177,15 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
         }
       });
 
-      if (DEBUG_PANEL_ENABLED) detachDebug = attachHlsDebug(hls, video, `${owner}/${topic}`);
+      if (DEBUG_PANEL_ENABLED) {
+        const detachLog = attachHlsDebug(hls, video, `${owner}/${topic}`);
+        // Hold playback until enough is buffered (start, seek, stall); set in the debug panel.
+        const detachGate = attachPrebufferGate(hls, video, !isVod);
+        detachDebug = () => {
+          detachGate();
+          detachLog();
+        };
+      }
 
       hls.attachMedia(video);
       hls.loadSource(`${owner}/${topic}`);

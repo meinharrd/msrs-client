@@ -1,5 +1,6 @@
 // In-memory log behind the debug panel. Nothing here touches the DOM; the panel polls `version`.
 
+import { prebuffer } from './prebuffer';
 import { classifySource, FragStatus, SourceKind } from './stats';
 
 /** True only in builds made with VITE_DEBUG_PANEL=true (see `pnpm build:debug`). */
@@ -164,6 +165,7 @@ class DebugLog {
       this.session.seekLatenciesMs = [];
       this.session.seeksSuperseded = 0;
     }
+    prebuffer.waits = [];
     this.touch();
   }
 
@@ -182,6 +184,7 @@ class DebugLog {
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
         timeOrigin: iso(performance.timeOrigin),
       },
+      prebuffer: { targetSec: prebuffer.targetSec, active: prebuffer.active, waits: prebuffer.waits },
       session: this.session
         ? {
             ...this.session,

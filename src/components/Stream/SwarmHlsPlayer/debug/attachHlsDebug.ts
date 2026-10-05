@@ -138,6 +138,8 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
   };
 
   const onPlaying = () => {
+    // The pre-buffer gate holds playback at playbackRate 0; "playing" then is not a frame on screen yet.
+    if (media.paused || media.playbackRate === 0) return;
     if (session.firstPlayingAt === null) {
       session.firstPlayingAt = Date.now();
       debugLog.marker(`first playing after ${session.firstPlayingAt - session.startedAt} ms`);
@@ -185,6 +187,7 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
   hls.on(Events.LEVEL_SWITCHED, onLevelSwitched);
   hls.on(Events.MANIFEST_PARSED, onManifestParsed);
   media.addEventListener('playing', onPlaying);
+  media.addEventListener('ratechange', onPlaying);
   media.addEventListener('timeupdate', onTimeUpdate);
   media.addEventListener('seeking', onSeeking);
   // Lets scripted runs (Playwright) read the log and hook hls.js events. Debug builds only.
@@ -200,6 +203,7 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
     hls.off(Events.LEVEL_SWITCHED, onLevelSwitched);
     hls.off(Events.MANIFEST_PARSED, onManifestParsed);
     media.removeEventListener('playing', onPlaying);
+    media.removeEventListener('ratechange', onPlaying);
     media.removeEventListener('timeupdate', onTimeUpdate);
     media.removeEventListener('seeking', onSeeking);
     // Requests still open when the player goes away will never complete.

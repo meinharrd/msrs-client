@@ -4,7 +4,8 @@ import { createPortal } from 'react-dom';
 import { browserNodeMode } from '../browserNode';
 
 import { debugLog, FragEntry, LogEntry, MAX_LOG_ENTRIES } from './debugLog';
-import { bufferedAhead, median, shortRef, summarizeFrags, throughputMbps } from './stats';
+import { bufferBarMax, bufferLevel, BufferSample, MAX_TARGET_SEC, prebuffer } from './prebuffer';
+import { median, shortRef, summarizeFrags, throughputMbps } from './stats';
 
 import './DebugPanel.scss';
 
@@ -29,7 +30,10 @@ function isSlow(f: FragEntry) {
   return (f.ttfbMs ?? 0) > SLOW_TTFB_MS || (f.loadMs !== null && f.duration > 0 && f.loadMs > f.duration * 1000);
 }
 
+const isPrebufferMarker = (e: LogEntry) => e.kind === 'marker' && e.text.startsWith('pre-buffer');
+
 function isErrorEntry(e: LogEntry) {
+  if (isPrebufferMarker(e)) return false;
   if (e.kind === 'frag') return e.status === 'error' || e.status === 'aborted' || !!e.error;
   if (e.kind === 'manifest') return !!e.error || (e.status !== null && e.status >= 400);
   return /error|stall/i.test(e.text);
@@ -110,20 +114,20 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
   const [paused, setPaused] = useState(false);
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [copyState, setCopyState] = useState('');
-  const [tick, setTick] = useState({ version: debugLog.version, buffered: 0 });
+  const [target, setTarget] = useState(prebuffer.targetSec);
+  // Re-render the summary when the log changes, and once a second for the running timers.
+  const [tick, setTick] = useState({ version: debugLog.version, second: 0 });
 
   useEffect(() => {
+    if (collapsed) return;
     const id = setInterval(() => {
-      const media = mediaRef.current;
-      const buffered = media ? bufferedAhead(media.buffered, media.currentTime) : 0;
+      const second = Math.floor(Date.now() / 1000);
       setTick((prev) =>
-        prev.version === debugLog.version && Math.abs(prev.buffered - buffered) < 0.05
-          ? prev
-          : { version: debugLog.version, buffered },
+        prev.version === debugLog.version && prev.second === second ? prev : { version: debugLog.version, second },
       );
     }, 500);
     return () => clearInterval(id);
-  }, [mediaRef]);
+  }, [collapsed]);
 
   // Pause freezes what is shown; logging carries on underneath.
   const [frozen, setFrozen] = useState<LogEntry[] | null>(null);
@@ -156,6 +160,14 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
       ? 'local node (Freedom Android virtual origin)'
       : 'gateway https';
 
+  const prebufTotals = prebuffer.totals();
+  const activeWait = prebuffer.active;
+
+  const onTarget = (v: number) => {
+    prebuffer.setTarget(v);
+    setTarget(prebuffer.targetSec);
+  };
+
   const onCopy = async () => {
     setCopyState((await copyLog()) ? 'copied' : 'copy failed');
     setTimeout(() => setCopyState(''), 2000);
@@ -177,6 +189,7 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
         />
       )}
       <div className="msrs-debug__bar">
+        <BufferReadout mediaRef={mediaRef} target={target} />
         <span className="msrs-debug__badge">DEBUG BUILD</span>
         <span className="msrs-debug__commit">{commit}</span>
         <span>
@@ -203,7 +216,8 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
               avg <b>{fmtMbps(summary.avgMbps)}</b> Mbit/s · {fmtBytes(summary.totalBytes)}
             </span>
             <span>
-              buffer <b>{tick.buffered.toFixed(1)}s</b> ahead
+              pre-buffer waits <b>{prebufTotals.count}</b> / <b>{fmtSec(prebufTotals.ms)}</b>
+              {activeWait ? ` · holding (${activeWait.reason}) ${fmtSec(Date.now() - activeWait.startedAt)}` : ''}
             </span>
             <span>
               stalls <b className={session?.stalls ? 'bad' : ''}>{session?.stalls ?? 0}</b> / {fmtSec(stallMs)}
@@ -232,6 +246,19 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
             <button onClick={() => debugLog.clear()}>Clear</button>
             <button onClick={onCopy}>Copy log</button>
             <button onClick={downloadLog}>Download log</button>
+            <label title="Hold playback until this much is buffered ahead (start, seek, stall). 0 = off.">
+              pre-buffer
+              <input
+                className="msrs-debug__target"
+                type="number"
+                min={0}
+                max={MAX_TARGET_SEC}
+                step={1}
+                value={target}
+                onChange={(e) => onTarget(Number(e.target.value))}
+              />
+              s
+            </label>
             <label>
               <input type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} /> errors
               only
@@ -276,7 +303,7 @@ export default function DebugPanel({ mediaRef }: DebugPanelProps) {
 function Row({ entry: e, sessionStart }: { entry: LogEntry; sessionStart: number }) {
   if (e.kind === 'marker') {
     return (
-      <tr className={`msrs-debug__marker ${isErrorEntry(e) ? 'err' : ''}`}>
+      <tr className={`msrs-debug__marker ${isErrorEntry(e) ? 'err' : ''} ${isPrebufferMarker(e) ? 'prebuf' : ''}`}>
         <td>{clock(e.at)}</td>
         <td colSpan={11}>— {e.text}</td>
       </tr>
@@ -352,4 +379,100 @@ function hostOf(url: string) {
   } catch {
     return '-';
   }
+}
+
+const SAMPLE_MS = 250;
+const SPARK_WINDOW_MS = 120_000;
+const SPARK_W = 120;
+const SPARK_H = 26;
+
+/**
+ * The number that matters most on a slow node: seconds buffered ahead, a bar against the pre-buffer target,
+ * and a sparkline of the last two minutes. Lives in the header row, so it shows when collapsed too.
+ */
+function BufferReadout({ mediaRef, target }: { mediaRef: React.RefObject<HTMLMediaElement>; target: number }) {
+  const [, setFrame] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setFrame((n) => n + 1), SAMPLE_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  const ahead = prebuffer.ahead;
+  const max = bufferBarMax(target);
+  const lvl = bufferLevel(ahead, target);
+  const active = prebuffer.active;
+  const media = mediaRef.current;
+
+  return (
+    <div className={`msrs-debug__buf lvl-${lvl}`} data-testid="msrs-debug-buffer">
+      <span className="msrs-debug__buf-num">
+        Buffer <b>{ahead.toFixed(1)}</b> s
+      </span>
+      <div
+        className="msrs-debug__buf-bar"
+        title={`buffered ahead ${ahead.toFixed(1)} s · target ${target} s · scale ${max} s`}
+      >
+        <div className="msrs-debug__buf-fill" style={{ width: `${Math.min(ahead / max, 1) * 100}%` }} />
+        {target > 0 && <div className="msrs-debug__buf-target" style={{ left: `${(target / max) * 100}%` }} />}
+        <span className="msrs-debug__buf-scale">{max}s</span>
+      </div>
+      <Sparkline samples={prebuffer.samples} max={max} target={target} />
+      {active && media && (
+        <PrebufferOverlay media={media} ahead={ahead} target={active.target} reason={active.reason} />
+      )}
+    </div>
+  );
+}
+
+function Sparkline({ samples, max, target }: { samples: BufferSample[]; max: number; target: number }) {
+  const now = Date.now();
+  const from = now - SPARK_WINDOW_MS;
+  const x = (t: number) => ((t - from) / SPARK_WINDOW_MS) * SPARK_W;
+  const y = (v: number) => SPARK_H - (Math.min(v, max) / max) * (SPARK_H - 2) - 1;
+  const recent = samples.filter((s) => s.t >= from);
+  const line = recent.map((s, i) => `${i ? 'L' : 'M'}${x(s.t).toFixed(1)},${y(s.ahead).toFixed(1)}`).join('');
+  const step = (SAMPLE_MS / SPARK_WINDOW_MS) * SPARK_W + 0.2;
+  return (
+    <svg
+      className="msrs-debug__spark"
+      width={SPARK_W}
+      height={SPARK_H}
+      viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
+      aria-label="buffer ahead, last 2 minutes (red: stalled, amber: pre-buffering)"
+    >
+      <title>buffer ahead, last 2 min · red = stalled · amber = held by pre-buffer</title>
+      {recent.map((s) =>
+        s.stalled || s.held ? (
+          <rect key={s.t} x={x(s.t)} y={0} width={step} height={SPARK_H} className={s.stalled ? 'stall' : 'held'} />
+        ) : null,
+      )}
+      {target > 0 && <line x1={0} x2={SPARK_W} y1={y(target)} y2={y(target)} className="target" />}
+      <path d={line} className="line" />
+    </svg>
+  );
+}
+
+function PrebufferOverlay({
+  media,
+  ahead,
+  target,
+  reason,
+}: {
+  media: HTMLMediaElement;
+  ahead: number;
+  target: number;
+  reason: string;
+}) {
+  const r = media.getBoundingClientRect();
+  if (r.width === 0 || r.height === 0) return null;
+  return createPortal(
+    <div
+      className="msrs-prebuffer-overlay"
+      style={{ left: r.left + r.width / 2, top: r.top + r.height / 2 }}
+      data-testid="msrs-prebuffer-overlay"
+    >
+      Buffering {ahead.toFixed(1)} / {target} s<small>{reason}</small>
+    </div>,
+    document.body,
+  );
 }
