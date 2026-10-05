@@ -12,6 +12,11 @@
 // - Stats handed to hls.js carry the real per-request durations (TTFB, load time, bytes), so its ABR and the debug
 //   panel see real numbers. For a fragment that finished before hls.js asked for it, the timestamps are shifted to end
 //   at delivery, so ABR doesn't count time spent waiting in the cache as download time.
+// - After a scrub settles, and after a seek to an unbuffered position while the node is slow (first bytes taking
+//   SLOW_TTFB_MS or more), the target fragment goes first: no prefetch starts until its first byte arrives, then the
+//   window opens to the full depth. A node still searching for the target would otherwise split its effort over
+//   depth+1 retrievals. On a node that answers quickly the window starts at once, as before: waiting for the target
+//   would only add one time-to-first-byte to the seek. Normal playback is unchanged.
 //
 // Nothing here depends on the debug panel; `subscribe()` is the hook it logs through.
 
@@ -34,6 +39,8 @@ export const DEFAULT_PREFETCH_DEPTH = 3;
 export const MAX_PREFETCH_DEPTH = 8;
 export const DEFAULT_MAX_ENTRIES = 8;
 export const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
+/** A node whose first bytes take this long (on average, or a request waiting now) gets the target alone after a seek. */
+export const SLOW_TTFB_MS = 1500;
 
 /** The part of an hls.js Fragment the window needs. */
 export interface FragLike {
@@ -131,6 +138,8 @@ export interface PrefetchSnapshot {
   misses: number;
   /** Prefetches aborted or dropped before hls.js used them. */
   wasted: number;
+  /** After a scrub or slow-node seek: how many prefetches may run now (0 = waiting for the target's first byte); null = not ramping. */
+  ramp: number | null;
 }
 
 type EntryState = 'loading' | 'done' | 'error';
@@ -162,6 +171,13 @@ export interface PrefetchOptions {
   maxEntries?: number;
   maxBytes?: number;
   fetch?: FetchImpl;
+  /**
+   * How many prefetches may start once the target's first byte arrived after a seek; one more per first byte after
+   * that, up to depth. Default: all of them.
+   */
+  rampOpen?: number;
+  /** See SLOW_TTFB_MS; 0 = gate every seek to an unbuffered position. */
+  slowTtfbMs?: number;
   /** Clock in ms, same base as hls.js stats (performance.now()). */
   now?: () => number;
 }
@@ -179,11 +195,21 @@ export class PrefetchController {
   private getFragments: (level: number) => readonly FragLike[] | undefined = () => undefined;
   private last: { level: number; sn: number } | null = null;
   private avgBytes = 0;
+  private readonly rampOpen: number;
+  private readonly slowTtfbMs: number;
+  /** Moving average of time to first byte (all fetches), ms; null before the first. */
+  private ttfbAvg: number | null = null;
   private counts = { hits: 0, joins: 0, misses: 0, wasted: 0 };
+  /** Prefetch allowance while ramping up after a seek; null = full depth (normal playback). */
+  private rampLimit: number | null = null;
+  /** The fragment the ramp waits on (the first one hls.js asks for after the seek); null until it asks. */
+  private gateUrl: string | null = null;
 
   constructor(opts: PrefetchOptions = {}) {
     this._depth = clampDepth(opts.depth ?? DEFAULT_PREFETCH_DEPTH);
     this.maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    this.rampOpen = opts.rampOpen ?? Infinity;
+    this.slowTtfbMs = opts.slowTtfbMs ?? SLOW_TTFB_MS;
     this.maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
     this.fetchImpl = opts.fetch ?? ((url, init) => fetch(url, init));
     this.now = opts.now ?? (() => performance.now());
@@ -244,7 +270,7 @@ export class PrefetchController {
         cachedBytes += e.loaded;
       }
     }
-    return { depth: this._depth, inFlight, cached, cachedBytes, ...this.counts };
+    return { depth: this._depth, inFlight, cached, cachedBytes, ...this.counts, ramp: this.rampLimit };
   }
 
   /** hls.js asks for fragment `sn` of `level`: hand back the entry serving it, and fill the window behind it. */
@@ -267,6 +293,11 @@ export class PrefetchController {
     }
     entry.claimed = true;
     this.emit({ type: 'claim', url, sn, level, how });
+    if (this.rampLimit === 0 && this.gateUrl === null) {
+      // First request after a seek: the target. Prefetches wait for its first byte.
+      this.gateUrl = url;
+      if (entry.firstAt !== null) this.openGate();
+    }
     this.fill(level, sn);
     return { entry, how };
   }
@@ -290,7 +321,8 @@ export class PrefetchController {
    * The playhead moved to `time`; hls.js will next load from `loadFrom` (the end of the buffer there, which is
    * `time` itself when nothing is buffered). Abort what lies outside the new window.
    */
-  onSeek(loadFrom: number) {
+  onSeek(loadFrom: number, gate = false) {
+    if (gate && this.nodeSlow()) this.gate();
     if (!this.last) return;
     const { level } = this.last;
     const frag = fragmentAt(this.getFragments(level), loadFrom);
@@ -300,6 +332,55 @@ export class PrefetchController {
     }
     // One fragment of slack before: hls.js may back-track to the fragment before for a keyframe.
     this.evictOutside(level, frag.sn - 1, frag.sn + this._depth, 'seek');
+  }
+
+  /**
+   * The user is scrubbing: hls.js stopped loading. Abort everything (prefetches and fetches hls.js let go of), and
+   * gate the prefetches behind the target once loading resumes.
+   */
+  abortAll(reason = 'scrub') {
+    this.gate();
+    this.evictWhere((e) => !e.claimed, reason);
+  }
+
+  /** The node takes long to answer: recent first bytes were slow, or a request has been waiting long already. */
+  nodeSlow(): boolean {
+    if (this.slowTtfbMs <= 0) return true;
+    if (this.ttfbAvg !== null && this.ttfbAvg >= this.slowTtfbMs) return true;
+    const now = this.now();
+    for (const e of this.entries.values()) {
+      if (e.state === 'loading' && e.firstAt === null && now - e.startedAt >= this.slowTtfbMs) return true;
+    }
+    return false;
+  }
+
+  /** Hold prefetches until the next fragment hls.js asks for sends its first byte. */
+  private gate() {
+    if (this._depth <= 0) return;
+    this.rampLimit = 0;
+    this.gateUrl = null;
+  }
+
+  private openGate() {
+    this.rampLimit = Math.max(1, Math.min(this.rampOpen, this._depth));
+    if (this.rampLimit >= this._depth) this.rampLimit = null;
+  }
+
+  /** An entry got its first byte: open the gate if it is the target, or widen the ramp by one. */
+  private onFirstByte(e: Entry) {
+    const ttfb = (e.firstAt ?? e.startedAt) - e.startedAt;
+    this.ttfbAvg = this.ttfbAvg === null ? ttfb : this.ttfbAvg * 0.7 + ttfb * 0.3;
+    if (this.rampLimit === null) return;
+    if (this.rampLimit === 0) {
+      if (e.url !== this.gateUrl) return;
+      this.openGate();
+    } else if (this.last && e.level === this.last.level) {
+      this.rampLimit++;
+    } else {
+      return;
+    }
+    if (this.rampLimit !== null && this.rampLimit >= this._depth) this.rampLimit = null;
+    if (this.last) this.fill(this.last.level, this.last.sn);
   }
 
   onLevelSwitch(level: number) {
@@ -347,7 +428,8 @@ export class PrefetchController {
   }
 
   private fill(level: number, sn: number) {
-    for (const f of prefetchWindow(this.getFragments(level), sn, this._depth)) {
+    const depth = this.rampLimit === null ? this._depth : Math.min(this._depth, this.rampLimit);
+    for (const f of prefetchWindow(this.getFragments(level), sn, depth)) {
       if (this.entries.has(f.url)) continue;
       if (!this.room()) break;
       this.start(f.url, f.sn as number, level, true);
@@ -391,6 +473,7 @@ export class PrefetchController {
       }
       e.total = Number(res.headers.get('content-length')) || 0;
       this.notify(e);
+      this.onFirstByte(e);
       let data: ArrayBuffer;
       const reader = res.body?.getReader();
       if (reader) {
@@ -619,11 +702,17 @@ export function attachPrefetch(controller: PrefetchController, hls: Hls, media: 
   const onSeeking = () => {
     const t = media.currentTime;
     let loadFrom = t;
+    let buffered = false;
     const b = media.buffered;
     for (let i = 0; i < b.length; i++) {
-      if (t >= b.start(i) - 0.5 && t <= b.end(i)) loadFrom = b.end(i);
+      if (t >= b.start(i) - 0.5 && t <= b.end(i)) {
+        loadFrom = b.end(i);
+        buffered = true;
+      }
     }
-    controller.onSeek(loadFrom);
+    // Into the buffer (incl. hls.js's own nudges and gap jumps), loading carries on at its end as in playback.
+    // Out of it, the fragment at the target goes first.
+    controller.onSeek(loadFrom, !buffered);
   };
   const onLevelSwitching = (_e: Events.LEVEL_SWITCHING, d: LevelSwitchingData) => controller.onLevelSwitch(d.level);
   media.addEventListener('seeking', onSeeking);

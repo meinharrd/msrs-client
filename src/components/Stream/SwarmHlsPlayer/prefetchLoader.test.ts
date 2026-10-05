@@ -84,7 +84,16 @@ function fakeResponse(bytes: number, status: number) {
   } as unknown as Response;
 }
 
-function setup(opts: { depth?: number; maxEntries?: number; maxBytes?: number; levels?: number } = {}) {
+function setup(
+  opts: {
+    depth?: number;
+    maxEntries?: number;
+    maxBytes?: number;
+    levels?: number;
+    rampOpen?: number;
+    slowTtfbMs?: number;
+  } = {},
+) {
   const calls: Call[] = [];
   let t = 1000;
   const clock = {
@@ -340,5 +349,115 @@ describe('PrefetchController + loader', () => {
     );
     expect(FakeBase.loads).toHaveLength(2);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('PrefetchController: target first after a seek', () => {
+  it('on a slow node, starts no prefetch until the target sends its first byte, then the full window', async () => {
+    const { ctl, calls, call, clock } = setup({ depth: 3 });
+    const first = load(ctl, 0);
+    clock.advance(2000); // the node takes 2 s to answer
+    call(url(0)).respond(1000);
+    await flush();
+    expect(first.cb.onSuccess).toHaveBeenCalled();
+    expect(ctl.nodeSlow()).toBe(true);
+    ctl.onSeek(20.5, true); // unbuffered seek
+    const before = calls.length;
+    load(ctl, 10);
+    expect(calls.slice(before).map((c) => c.url)).toEqual([url(10)]);
+    expect(ctl.snapshot().ramp).toBe(0);
+    call(url(10)).respond(1000); // first byte of the target
+    await flush();
+    expect(calls.slice(before).map((c) => c.url)).toEqual([url(10), url(11), url(12), url(13)]);
+    expect(ctl.snapshot().ramp).toBeNull();
+  });
+
+  it('a request waiting long for its first byte also marks the node slow', () => {
+    const { ctl, clock } = setup({ depth: 3 });
+    load(ctl, 0);
+    expect(ctl.nodeSlow()).toBe(false);
+    clock.advance(1500);
+    expect(ctl.nodeSlow()).toBe(true);
+  });
+
+  it('on a node that answers quickly, a single seek starts the full window at once', () => {
+    const { ctl, calls } = setup({ depth: 3 });
+    ctl.onSeek(20.5, true);
+    load(ctl, 10);
+    expect(calls.map((c) => c.url)).toEqual([url(10), url(11), url(12), url(13)]);
+  });
+
+  it('with rampOpen 1, ramps up one prefetch per first byte', async () => {
+    const { ctl, calls, call } = setup({ depth: 3, slowTtfbMs: 0, rampOpen: 1 });
+    ctl.onSeek(20.5, true); // unbuffered seek (nothing loaded yet either)
+    load(ctl, 10);
+    expect(calls.map((c) => c.url)).toEqual([url(10)]);
+    expect(ctl.snapshot().ramp).toBe(0);
+
+    call(url(10)).respond(1000); // first byte of the target
+    await flush();
+    expect(calls.map((c) => c.url)).toEqual([url(10), url(11)]);
+
+    call(url(11)).respond(1000);
+    await flush();
+    expect(calls.map((c) => c.url)).toEqual([url(10), url(11), url(12)]);
+    call(url(12)).respond(1000);
+    await flush();
+    expect(calls.map((c) => c.url)).toEqual([url(10), url(11), url(12), url(13)]);
+    expect(ctl.snapshot().ramp).toBeNull(); // back to the full window
+  });
+
+  it('keeps the full window during normal playback and for seeks into the buffer', () => {
+    const { ctl, calls } = setup({ depth: 3, slowTtfbMs: 0 });
+    load(ctl, 0);
+    expect(calls).toHaveLength(4);
+    ctl.onSeek(4.5, false); // buffered seek: loading carries on at the buffer end
+    load(ctl, 4);
+    expect(calls.map((c) => c.url).slice(4)).toEqual([url(4), url(5), url(6), url(7)]);
+  });
+
+  it('a target already in the cache opens the gate at once', async () => {
+    const { ctl, calls, call } = setup({ depth: 2, slowTtfbMs: 0, rampOpen: 1 });
+    load(ctl, 0); // 0 + 1, 2
+    call(url(1)).respond(1000);
+    await flush();
+    ctl.onSeek(2.5, true); // sn 1: done in the cache
+    load(ctl, 1);
+    await flush();
+    expect(ctl.snapshot().ramp).toBe(1); // no wait for a first byte: one prefetch may run (sn 2, still going)
+    call(url(2)).respond(1000);
+    await flush();
+    expect(calls.map((c) => c.url)).toContain(url(3));
+  });
+
+  it('a scrub aborts everything, and loading resumes target first (even on a quick node)', async () => {
+    const { ctl, calls, call } = setup({ depth: 3 });
+    const a = load(ctl, 0);
+    const live = () => calls.filter((c) => !c.signal.aborted).map((c) => c.url);
+    expect(live()).toHaveLength(4);
+    a.loader.abort(); // hls.stopLoad()
+    ctl.abortAll('scrub');
+    expect(live()).toEqual([]);
+    expect(ctl.snapshot().inFlight).toBe(0);
+    load(ctl, 15); // settle: hls.startLoad()
+    expect(live()).toEqual([url(15)]);
+    call(url(15)).respond(1000);
+    await flush();
+    expect(live()).toEqual([url(15), url(16), url(17), url(18)]);
+  });
+
+  it('a target that times out stays gated: the retry is the target again', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ctl, calls } = setup({ depth: 3, slowTtfbMs: 0 });
+      ctl.onSeek(20.5, true);
+      const a = load(ctl, 10, 0, loaderConfig(1000));
+      vi.advanceTimersByTime(1001);
+      expect(a.cb.onTimeout).toHaveBeenCalled();
+      load(ctl, 10);
+      expect(calls.filter((c) => !c.signal.aborted).map((c) => c.url)).toEqual([url(10)]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

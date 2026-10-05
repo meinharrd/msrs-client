@@ -252,7 +252,13 @@ export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps
               stalls <b className={session?.stalls ? 'bad' : ''}>{session?.stalls ?? 0}</b> / {fmtSec(stallMs)}
             </span>
             <span>
-              seeks <b>{session?.seeks ?? 0}</b> · to playing med/max{' '}
+              seeks <b>{session?.seeks ?? 0}</b>
+              {session?.scrubs
+                ? ` (${session.scrubs} scrub${session.scrubs > 1 ? 's' : ''}${
+                    session.lastScrubSeeks !== null ? `, settled after ${session.lastScrubSeeks} seeks` : ''
+                  })`
+                : ''}{' '}
+              {session?.scrubbing ? '· scrubbing, loading paused ' : ''}· to playing med/max{' '}
               <b>{fmtMs(median(session?.seekLatenciesMs ?? []))}</b>/
               <b>{session?.seekLatenciesMs.length ? fmtMs(Math.max(...session.seekLatenciesMs)) : '-'}</b> ms
               {session?.seekStartedAt ? ` · seeking ${fmtSec(Date.now() - session.seekStartedAt)}` : ''}

@@ -3,6 +3,7 @@
 import Hls, { ErrorData, ErrorDetails, Events, Fragment, LoaderStats } from 'hls.js';
 
 import type { ClaimKind, PrefetchController, PrefetchEvent } from '../prefetchLoader';
+import type { ScrubEvent, ScrubSettle } from '../scrubSettle';
 
 import { debugLog, FragEntry, FragVia, toEpoch } from './debugLog';
 import { watchRealSeeks } from './seekFilter';
@@ -29,6 +30,7 @@ export function attachHlsDebug(
   media: HTMLMediaElement,
   sourceUrl: string,
   prefetch?: PrefetchController | null,
+  scrub?: ScrubSettle | null,
 ): () => void {
   const session = debugLog.startSession(sourceUrl);
   const open = new Map<string, { entry: FragEntry; frag: Fragment }>();
@@ -230,7 +232,21 @@ export function attachHlsDebug(
   };
 
   // Only real seeks count (a user scrub, a script setting currentTime); hls.js's own nudges and gap jumps don't.
+  // A scrub (seeks in quick succession) counts once; its latency runs from its last seek.
+  // The player's ScrubSettle saw this `seeking` first (its listener was attached earlier), so its state is current.
   const onRealSeek = (to: number, from: number) => {
+    if (scrub?.state === 'scrubbing') {
+      if (scrub.seekCount === 2) {
+        session.scrubs++;
+        session.scrubbing = true;
+        debugLog.marker(`scrub: seeks in quick succession, loading paused until the playhead settles`);
+      } else {
+        debugLog.touch();
+      }
+      session.seekStartedAt = Date.now();
+      session.seekTarget = to;
+      return;
+    }
     if (session.seekStartedAt !== null) {
       session.seeksSuperseded++;
       debugLog.marker(
@@ -250,6 +266,15 @@ export function attachHlsDebug(
     else debugLog.touch();
   };
   const detachSeeks = watchRealSeeks(hls, media, onRealSeek, onIgnoredSeek);
+  const onScrub = (e: ScrubEvent) => {
+    if (e.type !== 'settle') return;
+    session.scrubbing = false;
+    session.lastScrubSeeks = e.seeks;
+    debugLog.marker(
+      `scrub settled after ${e.seeks} seeks (${e.durationMs} ms) at ${media.currentTime.toFixed(1)}s: loading`,
+    );
+  };
+  const unsubscribeScrub = scrub?.subscribe(onScrub);
 
   const onTimeUpdate = () => {
     if (session.stallStartedAt !== null && media.currentTime > lastTime + 0.1) endStall();
@@ -284,6 +309,7 @@ export function attachHlsDebug(
     media.removeEventListener('ratechange', onPlaying);
     media.removeEventListener('timeupdate', onTimeUpdate);
     detachSeeks();
+    unsubscribeScrub?.();
     unsubscribePrefetch?.();
     for (const row of prefetchRows.values()) {
       if (row.status === 'loading') {

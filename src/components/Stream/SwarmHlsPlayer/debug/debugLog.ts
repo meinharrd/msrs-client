@@ -79,8 +79,17 @@ export interface SessionState {
   stalls: number;
   stallTotalMs: number;
   stallStartedAt: number | null;
-  /** Seeks the user made; a seek ends when playback moves again, or when the next seek supersedes it. */
+  /**
+   * Seeks the user made; a seek ends when playback moves again, or when the next seek supersedes it. A scrub (a run
+   * of seeks in quick succession, see scrubSettle.ts) counts as one.
+   */
   seeks: number;
+  /** How many of `seeks` were scrubs. */
+  scrubs: number;
+  /** Seeks in the last scrub that settled, or null. */
+  lastScrubSeeks: number | null;
+  /** A scrub is going on (loading stopped until it settles). */
+  scrubbing: boolean;
   /** seek → playing latency of every completed seek, in ms. */
   seekLatenciesMs: number[];
   /** Seeks superseded by another seek before they played (scrubbing). */
@@ -127,6 +136,9 @@ class DebugLog {
       stallTotalMs: 0,
       stallStartedAt: null,
       seeks: 0,
+      scrubs: 0,
+      lastScrubSeeks: null,
+      scrubbing: false,
       seekLatenciesMs: [],
       seeksSuperseded: 0,
       seeksIgnored: 0,
@@ -171,6 +183,8 @@ class DebugLog {
       this.session.stalls = 0;
       this.session.stallTotalMs = 0;
       this.session.seeks = 0;
+      this.session.scrubs = 0;
+      this.session.lastScrubSeeks = null;
       this.session.seekLatenciesMs = [];
       this.session.seeksSuperseded = 0;
       this.session.seeksIgnored = 0;

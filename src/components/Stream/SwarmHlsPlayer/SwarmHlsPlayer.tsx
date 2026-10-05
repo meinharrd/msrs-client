@@ -10,9 +10,13 @@ import { DEBUG_PANEL_ENABLED } from './debug/debugLog';
 import { debugMediaRef } from './debug/mediaRegistry';
 import { attachPrebufferGate } from './debug/prebufferGate';
 import { prefetchSettings } from './debug/prefetchSettings';
+import { watchRealSeeks } from './debug/seekFilter';
+import { browserNodeMode } from './browserNode';
 import { clearStreamMetadata, CustomManifestLoader, setStreamMetadata } from './CustomManifestLoader';
+import { fragLoadConfigFor } from './loadPolicy';
 import { isServedOverBzz } from './ManifestManagement';
 import { attachPrefetch, createPrefetchLoader, PrefetchController } from './prefetchLoader';
+import { ScrubSettle } from './scrubSettle';
 
 import './SwarmHlsPlayer.scss';
 
@@ -87,6 +91,8 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
 
     let prefetch: PrefetchController | null = null;
     let detachPrefetch: (() => void) | null = null;
+    let scrub: ScrubSettle | null = null;
+    let detachScrub: (() => void) | null = null;
 
     if (Hls.isSupported()) {
       // Segments become `bzz://` URLs under Freedom, which registers that scheme for fetch.
@@ -106,6 +112,8 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
         maxMaxBufferLength: 120,
         maxBufferSize: 60 * 1024 * 1024, // 60MB
         maxBufferHole: 1,
+        // On the local node: one long-lived request per slow segment instead of a new one every 10 s.
+        ...fragLoadConfigFor(browserNodeMode()),
         ...(resumeAt !== null && { startPosition: resumeAt }),
       });
 
@@ -197,10 +205,28 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
         }
       });
 
+      // Scrubbing (seeks in quick succession, e.g. dragging the seek bar): stop loading, and load once the playhead
+      // has settled. A single seek loads at once. Attached before hls.attachMedia(), so on each `seeking` this runs
+      // before hls.js's own handler, which would otherwise start loading the fragment at every intermediate position.
+      const stopForScrub = () => {
+        hls?.stopLoad();
+        prefetch?.abortAll('scrub');
+      };
+      scrub = new ScrubSettle({
+        onScrubStart: stopForScrub,
+        onScrubSeek: stopForScrub,
+        onSettle: () => {
+          // Paused: loading resumes on play, as after any pause.
+          if (!stoppedByPause) hls?.startLoad(video.currentTime);
+        },
+      });
+      const settle = scrub;
+      detachScrub = watchRealSeeks(hls, video, () => settle.seek());
+
       if (prefetch) detachPrefetch = attachPrefetch(prefetch, hls, video);
 
       if (DEBUG_PANEL_ENABLED) {
-        const detachLog = attachHlsDebug(hls, video, `${owner}/${topic}`, prefetch);
+        const detachLog = attachHlsDebug(hls, video, `${owner}/${topic}`, prefetch, scrub);
         // Hold playback until enough is buffered (start, seek, stall); set in the debug panel.
         const detachGate = attachPrebufferGate(hls, video, !isVod);
         detachDebug = () => {
@@ -231,6 +257,8 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
       const hexTopic = Topic.fromString(topic).toString();
       clearStreamMetadata(hexTopic);
       detachDebug?.();
+      detachScrub?.();
+      scrub?.destroy();
       detachPrefetch?.();
       if (prefetch) {
         prefetch.destroy();
