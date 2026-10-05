@@ -1,5 +1,5 @@
 import React, { Suspense } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 import { LoginButton } from '@/components/LoginButton/LoginButton';
 import { LoginModal } from '@/components/LoginModal/LoginModal';
@@ -14,7 +14,7 @@ import { AVAILABLE_THEMES } from '@/utils/theme/themeConfig';
 
 import './MainLayout.scss';
 
-// Debug build only (VITE_DEBUG_PANEL=true): the segment/playlist timing panel, on every page; kept out of normal bundles.
+// Debug build only (VITE_DEBUG_PANEL=true): the segment/playlist timing panel, on stream pages; kept out of normal bundles.
 const DebugPanel = DEBUG_PANEL_ENABLED
   ? React.lazy(() => import('@/components/Stream/SwarmHlsPlayer/debug/DebugPanel'))
   : null;
@@ -27,6 +27,8 @@ export function MainLayout({ children }: MainLayoutProps) {
   const { isOnline } = useNetworkStatus(); // TODO - reanable
   const { isLoginModalOpen } = useUserContext();
   const { theme } = useTheme();
+  const { pathname } = useLocation();
+  const onStreamPage = pathname.startsWith('/watch/');
 
   const { backgroundVideoPath } = AVAILABLE_THEMES[theme];
 
@@ -44,7 +46,7 @@ export function MainLayout({ children }: MainLayoutProps) {
         <LoginButton />
       </header>
       {isLoginModalOpen && <LoginModal />}
-      {DebugPanel && (
+      {DebugPanel && onStreamPage && (
         <Suspense fallback={null}>
           <DebugPanel />
         </Suspense>
