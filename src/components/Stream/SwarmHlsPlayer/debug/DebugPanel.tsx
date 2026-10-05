@@ -5,7 +5,7 @@ import { browserNodeMode } from '../browserNode';
 
 import { debugLog, FragEntry, LogEntry, MAX_LOG_ENTRIES } from './debugLog';
 import { bufferBarMax, bufferLevel, BufferSample, MAX_TARGET_SEC, prebuffer } from './prebuffer';
-import { median, shortRef, summarizeFrags, throughputMbps } from './stats';
+import { bufferedAhead, median, shortRef, summarizeFrags, throughputMbps } from './stats';
 
 import './DebugPanel.scss';
 
@@ -397,11 +397,12 @@ function BufferReadout({ mediaRef, target }: { mediaRef: React.RefObject<HTMLMed
     return () => clearInterval(id);
   }, []);
 
-  const ahead = prebuffer.ahead;
+  const media = mediaRef.current;
+  // Read live rather than from the last sample, so a seek shows its empty buffer at once.
+  const ahead = media ? bufferedAhead(media.buffered, media.currentTime) : prebuffer.ahead;
   const max = bufferBarMax(target);
   const lvl = bufferLevel(ahead, target);
   const active = prebuffer.active;
-  const media = mediaRef.current;
 
   return (
     <div className={`msrs-debug__buf lvl-${lvl}`} data-testid="msrs-debug-buffer">
