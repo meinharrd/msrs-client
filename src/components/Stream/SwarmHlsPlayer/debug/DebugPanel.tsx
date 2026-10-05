@@ -233,7 +233,7 @@ export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps
                   {' '}
                   · net in flight <b>{pf.inFlight}</b> · cache <b>{pf.cached}</b> / {fmtBytes(pf.cachedBytes)} · hits{' '}
                   <b>{pf.hits}</b> joins <b>{pf.joins}</b> misses {pf.misses}
-                  {pf.wasted ? ` · ${pf.wasted} cancelled` : ''}
+                  {pf.wasted ? ` · ${pf.wasted} unused (cancelled or dropped)` : ''}
                 </>
               ) : null}
             </span>
