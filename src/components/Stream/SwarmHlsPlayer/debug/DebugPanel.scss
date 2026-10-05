@@ -300,14 +300,6 @@ $buf-green: #22c55e;
   font-weight: 600;
 }
 
-// The player's usual spinner over the video while pre-buffering holds playback.
-.msrs-hold-spinner {
-  position: fixed;
-  z-index: 9999;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
-
 // Phones: a bigger grab target and grip. The hit area is centred and narrower than the panel, so the video's
 // controls at the left and right edges above it stay tappable; the panel gets top padding to make room.
 @media (pointer: coarse), (max-width: 600px) {

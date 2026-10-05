@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import { InputLoading } from '@/components/InputLoading/InputLoading';
-
 import { browserNodeMode } from '../browserNode';
 import { MAX_PREFETCH_DEPTH } from '../prefetchLoader';
 
@@ -474,7 +472,6 @@ function BufferReadout({ mediaRef, target }: { mediaRef: { current: HTMLMediaEle
           holding ({active.reason}) {ahead.toFixed(1)}/{active.target} s
         </span>
       )}
-      {active && media && <HoldSpinner media={media} />}
     </div>
   );
 }
@@ -504,21 +501,5 @@ function Sparkline({ samples, max, target }: { samples: BufferSample[]; max: num
       {target > 0 && <line x1={0} x2={SPARK_W} y1={y(target)} y2={y(target)} className="target" />}
       <path d={line} className="line" />
     </svg>
-  );
-}
-
-/** While pre-buffering holds playback, show the player's usual loading spinner over the video (no text). */
-function HoldSpinner({ media }: { media: HTMLMediaElement }) {
-  const r = media.getBoundingClientRect();
-  if (r.width === 0 || r.height === 0) return null;
-  return createPortal(
-    <div
-      className="msrs-hold-spinner"
-      style={{ left: r.left + r.width / 2, top: r.top + r.height / 2 }}
-      data-testid="msrs-prebuffer-spinner"
-    >
-      <InputLoading />
-    </div>,
-    document.body,
   );
 }
