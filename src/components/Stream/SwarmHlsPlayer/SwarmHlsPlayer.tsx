@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from '@ethersphere/bee-js';
 import Hls, { ErrorDetails, ErrorTypes, Events, FetchLoader } from 'hls.js';
 
@@ -7,6 +7,7 @@ import { MediaType, StateType } from '@/types/stream';
 
 import { attachHlsDebug } from './debug/attachHlsDebug';
 import { DEBUG_PANEL_ENABLED } from './debug/debugLog';
+import { debugMediaRef } from './debug/mediaRegistry';
 import { attachPrebufferGate } from './debug/prebufferGate';
 import { clearStreamMetadata, CustomManifestLoader, setStreamMetadata } from './CustomManifestLoader';
 import { isServedOverBzz } from './ManifestManagement';
@@ -14,9 +15,6 @@ import { isServedOverBzz } from './ManifestManagement';
 import './SwarmHlsPlayer.scss';
 
 const MAX_IN_PLACE_RECOVERIES = 3;
-
-// Debug build only (VITE_DEBUG_PANEL=true): segment/playlist timing panel, kept out of normal bundles.
-const DebugPanel = DEBUG_PANEL_ENABLED ? React.lazy(() => import('./debug/DebugPanel')) : null;
 
 interface HlsPlayerProps extends React.VideoHTMLAttributes<HTMLVideoElement> {
   owner: string;
@@ -53,6 +51,16 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
     setHasFatalError(false);
     setIsReady(false);
   }, [owner, topic]);
+
+  // Debug build: hand the media element to the app-wide debug panel while this player is mounted.
+  useEffect(() => {
+    if (!DEBUG_PANEL_ENABLED) return;
+    const el = videoRef.current;
+    debugMediaRef.current = el;
+    return () => {
+      if (debugMediaRef.current === el) debugMediaRef.current = null;
+    };
+  });
 
   useEffect(() => {
     const video = videoRef.current;
@@ -234,11 +242,6 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
 
   return (
     <>
-      {DebugPanel && (
-        <Suspense fallback={null}>
-          <DebugPanel mediaRef={videoRef} />
-        </Suspense>
-      )}
       {!isReady && (
         <div className="swarm-hls-player-loading">
           <InputLoading />

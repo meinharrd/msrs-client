@@ -1,9 +1,11 @@
+import React, { Suspense } from 'react';
 import { Link } from 'react-router-dom';
 
 import { LoginButton } from '@/components/LoginButton/LoginButton';
 import { LoginModal } from '@/components/LoginModal/LoginModal';
 import { Logo, LogoVariant } from '@/components/Logo';
 import { NetworkStatus } from '@/components/NetworkStatus/NetworkStatus';
+import { DEBUG_PANEL_ENABLED } from '@/components/Stream/SwarmHlsPlayer/debug/debugLog';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus';
 import { useTheme } from '@/providers/Theme';
 import { useUserContext } from '@/providers/User';
@@ -11,6 +13,11 @@ import { ROUTES } from '@/routes';
 import { AVAILABLE_THEMES } from '@/utils/theme/themeConfig';
 
 import './MainLayout.scss';
+
+// Debug build only (VITE_DEBUG_PANEL=true): the segment/playlist timing panel, on every page; kept out of normal bundles.
+const DebugPanel = DEBUG_PANEL_ENABLED
+  ? React.lazy(() => import('@/components/Stream/SwarmHlsPlayer/debug/DebugPanel'))
+  : null;
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -37,6 +44,11 @@ export function MainLayout({ children }: MainLayoutProps) {
         <LoginButton />
       </header>
       {isLoginModalOpen && <LoginModal />}
+      {DebugPanel && (
+        <Suspense fallback={null}>
+          <DebugPanel />
+        </Suspense>
+      )}
       <div className="content">{children}</div>
     </div>
   );

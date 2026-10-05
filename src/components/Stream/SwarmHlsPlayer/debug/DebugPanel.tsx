@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { InputLoading } from '@/components/InputLoading/InputLoading';
+
 import { browserNodeMode } from '../browserNode';
 
 import { debugLog, FragEntry, LogEntry, MAX_LOG_ENTRIES } from './debugLog';
+import { debugMediaRef } from './mediaRegistry';
 import { bufferBarMax, bufferLevel, BufferSample, MAX_TARGET_SEC, prebuffer } from './prebuffer';
 import { bufferedAhead, median, shortRef, summarizeFrags, throughputMbps } from './stats';
 
@@ -13,7 +16,8 @@ const MAX_ROWS = 300;
 const SLOW_TTFB_MS = 2000;
 
 interface DebugPanelProps {
-  mediaRef: React.RefObject<HTMLMediaElement>;
+  /** Defaults to the media element the player registered (debugMediaRef). */
+  mediaRef?: { current: HTMLMediaElement | null };
 }
 
 const clock = (ms: number) => {
@@ -107,7 +111,7 @@ function useResizeHandle(setHeight: (px: number) => void) {
   );
 }
 
-export default function DebugPanel({ mediaRef }: DebugPanelProps) {
+export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [height, setHeight] = useState(loadHeight);
   const startResize = useResizeHandle(setHeight);
@@ -390,7 +394,7 @@ const SPARK_H = 26;
  * The number that matters most on a slow node: seconds buffered ahead, a bar against the pre-buffer target,
  * and a sparkline of the last two minutes. Lives in the header row, so it shows when collapsed too.
  */
-function BufferReadout({ mediaRef, target }: { mediaRef: React.RefObject<HTMLMediaElement>; target: number }) {
+function BufferReadout({ mediaRef, target }: { mediaRef: { current: HTMLMediaElement | null }; target: number }) {
   const [, setFrame] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setFrame((n) => n + 1), SAMPLE_MS);
@@ -418,9 +422,13 @@ function BufferReadout({ mediaRef, target }: { mediaRef: React.RefObject<HTMLMed
         <span className="msrs-debug__buf-scale">{max}s</span>
       </div>
       <Sparkline samples={prebuffer.samples} max={max} target={target} />
+      {!media && <span className="msrs-debug__note">no player on this page</span>}
       {active && media && (
-        <PrebufferOverlay media={media} ahead={ahead} target={active.target} reason={active.reason} />
+        <span className="msrs-debug__holding" data-testid="msrs-prebuffer-holding">
+          holding ({active.reason}) {ahead.toFixed(1)}/{active.target} s
+        </span>
       )}
+      {active && media && <HoldSpinner media={media} />}
     </div>
   );
 }
@@ -453,26 +461,17 @@ function Sparkline({ samples, max, target }: { samples: BufferSample[]; max: num
   );
 }
 
-function PrebufferOverlay({
-  media,
-  ahead,
-  target,
-  reason,
-}: {
-  media: HTMLMediaElement;
-  ahead: number;
-  target: number;
-  reason: string;
-}) {
+/** While pre-buffering holds playback, show the player's usual loading spinner over the video (no text). */
+function HoldSpinner({ media }: { media: HTMLMediaElement }) {
   const r = media.getBoundingClientRect();
   if (r.width === 0 || r.height === 0) return null;
   return createPortal(
     <div
-      className="msrs-prebuffer-overlay"
+      className="msrs-hold-spinner"
       style={{ left: r.left + r.width / 2, top: r.top + r.height / 2 }}
-      data-testid="msrs-prebuffer-overlay"
+      data-testid="msrs-prebuffer-spinner"
     >
-      Buffering {ahead.toFixed(1)} / {target} s<small>{reason}</small>
+      <InputLoading />
     </div>,
     document.body,
   );
