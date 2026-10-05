@@ -4,10 +4,12 @@ import { createPortal } from 'react-dom';
 import { InputLoading } from '@/components/InputLoading/InputLoading';
 
 import { browserNodeMode } from '../browserNode';
+import { MAX_PREFETCH_DEPTH } from '../prefetchLoader';
 
 import { debugLog, FragEntry, LogEntry, MAX_LOG_ENTRIES } from './debugLog';
 import { debugMediaRef } from './mediaRegistry';
 import { bufferBarMax, bufferLevel, BufferSample, MAX_TARGET_SEC, prebuffer } from './prebuffer';
+import { prefetchSettings } from './prefetchSettings';
 import { bufferedAhead, median, shortRef, summarizeFrags, throughputMbps } from './stats';
 
 import './DebugPanel.scss';
@@ -38,7 +40,11 @@ const isPrebufferMarker = (e: LogEntry) => e.kind === 'marker' && e.text.startsW
 
 function isErrorEntry(e: LogEntry) {
   if (isPrebufferMarker(e)) return false;
-  if (e.kind === 'frag') return e.status === 'error' || e.status === 'aborted' || !!e.error;
+  if (e.kind === 'frag') {
+    // Prefetches cancelled by a seek or level switch are expected, not errors.
+    if (e.fragType === 'prefetch' && e.status === 'aborted') return false;
+    return e.status === 'error' || e.status === 'aborted' || !!e.error;
+  }
   if (e.kind === 'manifest') return !!e.error || (e.status !== null && e.status >= 400);
   return /error|stall/i.test(e.text);
 }
@@ -119,6 +125,7 @@ export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [copyState, setCopyState] = useState('');
   const [target, setTarget] = useState(prebuffer.targetSec);
+  const [depth, setDepth] = useState(prefetchSettings.depth);
   // Re-render the summary when the log changes, and once a second for the running timers.
   const [tick, setTick] = useState({ version: debugLog.version, second: 0 });
 
@@ -144,7 +151,10 @@ export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps
 
   const { rows, summary } = useMemo(() => {
     const all = frozen ?? debugLog.entries;
-    const frags = all.filter((e): e is FragEntry => e.kind === 'frag' && e.session === sessionId);
+    // Background prefetch rows are shown, but the summary is over what hls.js asked for (no double counting).
+    const frags = all.filter(
+      (e): e is FragEntry => e.kind === 'frag' && e.session === sessionId && e.fragType !== 'prefetch',
+    );
     const visible = (errorsOnly ? all.filter(isErrorEntry) : all).slice(-MAX_ROWS).reverse();
     return { rows: visible, summary: summarizeFrags(frags) };
     // tick.version drives recomputation while the log mutates in place
@@ -171,6 +181,12 @@ export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps
     prebuffer.setTarget(v);
     setTarget(prebuffer.targetSec);
   };
+
+  const onDepth = (v: number) => {
+    prefetchSettings.setDepth(v);
+    setDepth(prefetchSettings.depth);
+  };
+  const pf = prefetchSettings.current?.snapshot();
 
   const onCopy = async () => {
     setCopyState((await copyLog()) ? 'copied' : 'copy failed');
@@ -210,6 +226,17 @@ export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps
               segs <b>{summary.loaded}</b> ok · <b className={summary.failed ? 'bad' : ''}>{summary.failed}</b> failed ·{' '}
               {summary.aborted} aborted · <b>{summary.inFlight}</b> in flight
             </span>
+            <span data-testid="msrs-debug-prefetch">
+              prefetch <b>{depth ? `+${depth}` : 'off'}</b>
+              {pf ? (
+                <>
+                  {' '}
+                  · net in flight <b>{pf.inFlight}</b> · cache <b>{pf.cached}</b> / {fmtBytes(pf.cachedBytes)} · hits{' '}
+                  <b>{pf.hits}</b> joins <b>{pf.joins}</b> misses {pf.misses}
+                  {pf.wasted ? ` · ${pf.wasted} cancelled` : ''}
+                </>
+              ) : null}
+            </span>
             <span>
               TTFB med/p90 <b>{fmtMs(summary.ttfbMedian)}</b>/<b>{fmtMs(summary.ttfbP90)}</b> ms
             </span>
@@ -232,6 +259,7 @@ export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps
               <b>{session?.seekLatenciesMs.length ? fmtMs(Math.max(...session.seekLatenciesMs)) : '-'}</b> ms
               {session?.seekStartedAt ? ` · seeking ${fmtSec(Date.now() - session.seekStartedAt)}` : ''}
               {session?.seeksSuperseded ? ` · ${session.seeksSuperseded} superseded` : ''}
+              {session?.seeksIgnored ? ` · ${session.seeksIgnored} hls.js moves not counted` : ''}
             </span>
             <span>
               level <b>{session?.currentLevel ?? '-'}</b>
@@ -262,6 +290,19 @@ export default function DebugPanel({ mediaRef = debugMediaRef }: DebugPanelProps
                 onChange={(e) => onTarget(Number(e.target.value))}
               />
               s
+            </label>
+            <label title="Segments fetched ahead, in parallel with the one hls.js loads. 0 = off (hls.js alone).">
+              prefetch
+              <input
+                className="msrs-debug__target"
+                type="number"
+                min={0}
+                max={MAX_PREFETCH_DEPTH}
+                step={1}
+                value={depth}
+                onChange={(e) => onDepth(Number(e.target.value))}
+                data-testid="msrs-debug-prefetch-depth"
+              />
             </label>
             <label>
               <input type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} /> errors
@@ -338,14 +379,19 @@ function Row({ entry: e, sessionStart }: { entry: LogEntry; sessionStart: number
     );
   }
 
-  const cls = e.status === 'error' ? 'err' : e.status === 'aborted' ? 'aborted' : isSlow(e) ? 'slow' : '';
+  const isPrefetch = e.fragType === 'prefetch';
+  const cls = `${e.status === 'error' ? 'err' : e.status === 'aborted' ? 'aborted' : isSlow(e) ? 'slow' : ''}${
+    isPrefetch ? ' prefetch' : e.via ? ' cached' : ''
+  }`;
   const start = e.requestStart ? `+${((e.requestStart - sessionStart) / 1000).toFixed(1)}s` : '-';
   const status =
     e.status === 'loading'
       ? 'loading…'
       : `${e.status}${e.httpStatus ? ` ${e.httpStatus}` : ''}${e.retries ? ` retry×${e.retries}` : ''}${
           e.attempt > 1 ? ` #${e.attempt}` : ''
-        }${e.error ? ` ${e.error}` : ''}`;
+        }${e.error ? ` ${e.error}` : ''}${e.via && !isPrefetch ? ` (${e.via})` : ''}${
+          isPrefetch && e.via === 'prefetch (used)' ? ' → used' : ''
+        }`;
   return (
     <tr className={`msrs-debug__frag ${cls}`} title={e.url}>
       <td>{clock(e.at)}</td>

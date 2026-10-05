@@ -8,6 +8,7 @@ import Hls, { ErrorData, ErrorDetails, Events } from 'hls.js';
 
 import { debugLog } from './debugLog';
 import { DEFAULT_TIMEOUT_MS, prebuffer, prebufferDecision, PrebufferOutcome, PrebufferReason } from './prebuffer';
+import { watchRealSeeks } from './seekFilter';
 import { bufferedAhead } from './stats';
 
 const POLL_MS = 250;
@@ -104,7 +105,8 @@ export function attachPrebufferGate(hls: Hls, media: HTMLMediaElement, isLive: b
       begin('play');
     }
   };
-  const onSeeking = () => {
+  // Real seeks only: hls.js's own nudges and gap jumps (which also fire `seeking`) must not start a wait.
+  const onSeek = () => {
     // A seek while paused (by the user, or before autoplay) gates when playback starts.
     if (!media.paused) begin('seek');
   };
@@ -140,7 +142,7 @@ export function attachPrebufferGate(hls: Hls, media: HTMLMediaElement, isLive: b
 
   media.addEventListener('pause', onPause);
   media.addEventListener('play', onPlay);
-  media.addEventListener('seeking', onSeeking);
+  const detachSeeks = watchRealSeeks(hls, media, onSeek);
   media.addEventListener('waiting', onStall);
   media.addEventListener('ratechange', onRateChange);
   media.addEventListener('loadstart', onRateChange);
@@ -157,7 +159,7 @@ export function attachPrebufferGate(hls: Hls, media: HTMLMediaElement, isLive: b
     media.playbackRate = restoreRate;
     media.removeEventListener('pause', onPause);
     media.removeEventListener('play', onPlay);
-    media.removeEventListener('seeking', onSeeking);
+    detachSeeks();
     media.removeEventListener('waiting', onStall);
     media.removeEventListener('ratechange', onRateChange);
     media.removeEventListener('loadstart', onRateChange);

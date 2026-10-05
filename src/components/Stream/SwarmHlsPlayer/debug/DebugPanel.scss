@@ -157,6 +157,20 @@
     color: #a78bfa;
   }
 
+  // Background prefetch rows, and hls.js rows served from the prefetch cache.
+  tr.prefetch td {
+    color: #67e8f9;
+    font-style: italic;
+  }
+
+  tr.prefetch.aborted td {
+    color: #7c8a99;
+  }
+
+  tr.cached td:last-child {
+    color: #86efac;
+  }
+
   tr.msrs-debug__manifest td {
     color: #93c5fd;
   }

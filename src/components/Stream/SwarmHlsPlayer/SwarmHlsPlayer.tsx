@@ -9,8 +9,10 @@ import { attachHlsDebug } from './debug/attachHlsDebug';
 import { DEBUG_PANEL_ENABLED } from './debug/debugLog';
 import { debugMediaRef } from './debug/mediaRegistry';
 import { attachPrebufferGate } from './debug/prebufferGate';
+import { prefetchSettings } from './debug/prefetchSettings';
 import { clearStreamMetadata, CustomManifestLoader, setStreamMetadata } from './CustomManifestLoader';
 import { isServedOverBzz } from './ManifestManagement';
+import { attachPrefetch, createPrefetchLoader, PrefetchController } from './prefetchLoader';
 
 import './SwarmHlsPlayer.scss';
 
@@ -83,11 +85,21 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
     let onPlay: (() => void) | null = null;
     let onPosition: (() => void) | null = null;
 
+    let prefetch: PrefetchController | null = null;
+    let detachPrefetch: (() => void) | null = null;
+
     if (Hls.isSupported()) {
+      // Segments become `bzz://` URLs under Freedom, which registers that scheme for fetch.
+      const BaseLoader = isServedOverBzz() ? FetchLoader : Hls.DefaultConfig.loader;
+      // Debug build: keep several segment requests in flight (depth set in the panel; 0 = hls.js alone).
+      if (DEBUG_PANEL_ENABLED) {
+        prefetch = new PrefetchController({ depth: prefetchSettings.depth });
+        prefetchSettings.current = prefetch;
+      }
       hls = new Hls({
         pLoader: CustomManifestLoader,
-        // Segments become `bzz://` URLs under Freedom, which registers that scheme for fetch.
         ...(isServedOverBzz() && { loader: FetchLoader }),
+        ...(prefetch && { fLoader: createPrefetchLoader(prefetch, BaseLoader) }),
         liveSyncDuration: 10,
         liveMaxLatencyDuration: 30,
         maxBufferLength: 60,
@@ -185,8 +197,10 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
         }
       });
 
+      if (prefetch) detachPrefetch = attachPrefetch(prefetch, hls, video);
+
       if (DEBUG_PANEL_ENABLED) {
-        const detachLog = attachHlsDebug(hls, video, `${owner}/${topic}`);
+        const detachLog = attachHlsDebug(hls, video, `${owner}/${topic}`, prefetch);
         // Hold playback until enough is buffered (start, seek, stall); set in the debug panel.
         const detachGate = attachPrebufferGate(hls, video, !isVod);
         detachDebug = () => {
@@ -217,6 +231,11 @@ export const SwarmHlsPlayer: React.FC<HlsPlayerProps> = ({
       const hexTopic = Topic.fromString(topic).toString();
       clearStreamMetadata(hexTopic);
       detachDebug?.();
+      detachPrefetch?.();
+      if (prefetch) {
+        prefetch.destroy();
+        if (prefetchSettings.current === prefetch) prefetchSettings.current = null;
+      }
       if (onPause) video.removeEventListener('pause', onPause);
       if (onPlay) video.removeEventListener('play', onPlay);
       if (onPosition) {

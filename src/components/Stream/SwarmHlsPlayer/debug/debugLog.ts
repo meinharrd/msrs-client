@@ -1,6 +1,7 @@
 // In-memory log behind the debug panel. Nothing here touches the DOM; the panel polls `version`.
 
 import { prebuffer } from './prebuffer';
+import { prefetchSettings } from './prefetchSettings';
 import { classifySource, FragStatus, SourceKind } from './stats';
 
 /** True only in builds made with VITE_DEBUG_PANEL=true (see `pnpm build:debug`). */
@@ -10,6 +11,9 @@ export const MAX_LOG_ENTRIES = 2000;
 
 /** performance.now() timestamps → epoch milliseconds. */
 export const toEpoch = (perfMs: number) => performance.timeOrigin + perfMs;
+
+/** How a segment row was served when prefetch is on. */
+export type FragVia = 'cache hit' | 'joined prefetch' | 'prefetch' | 'prefetch (used)';
 
 export interface FragEntry {
   kind: 'frag';
@@ -38,6 +42,8 @@ export interface FragEntry {
   aborted: boolean;
   httpStatus: number | null;
   error: string | null;
+  /** hls.js rows: served from the prefetch cache / joined a running prefetch. Prefetch rows: 'prefetch'. */
+  via: FragVia | null;
 }
 
 export interface ManifestEntry {
@@ -79,6 +85,8 @@ export interface SessionState {
   seekLatenciesMs: number[];
   /** Seeks superseded by another seek before they played (scrubbing). */
   seeksSuperseded: number;
+  /** Playhead moves made by hls.js itself (nudges, gap jumps, start position), not counted as seeks. */
+  seeksIgnored: number;
   /** Open seek: when it started and its target time. */
   seekStartedAt: number | null;
   seekTarget: number | null;
@@ -121,6 +129,7 @@ class DebugLog {
       seeks: 0,
       seekLatenciesMs: [],
       seeksSuperseded: 0,
+      seeksIgnored: 0,
       seekStartedAt: null,
       seekTarget: null,
       currentLevel: -1,
@@ -164,6 +173,7 @@ class DebugLog {
       this.session.seeks = 0;
       this.session.seekLatenciesMs = [];
       this.session.seeksSuperseded = 0;
+      this.session.seeksIgnored = 0;
     }
     prebuffer.waits = [];
     this.touch();
@@ -185,6 +195,7 @@ class DebugLog {
         timeOrigin: iso(performance.timeOrigin),
       },
       prebuffer: { targetSec: prebuffer.targetSec, active: prebuffer.active, waits: prebuffer.waits },
+      prefetch: { depth: prefetchSettings.depth, now: prefetchSettings.current?.snapshot() ?? null },
       session: this.session
         ? {
             ...this.session,

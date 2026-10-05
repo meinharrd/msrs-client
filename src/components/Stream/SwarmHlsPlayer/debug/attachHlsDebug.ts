@@ -2,7 +2,10 @@
 
 import Hls, { ErrorData, ErrorDetails, Events, Fragment, LoaderStats } from 'hls.js';
 
-import { debugLog, FragEntry, toEpoch } from './debugLog';
+import type { ClaimKind, PrefetchController, PrefetchEvent } from '../prefetchLoader';
+
+import { debugLog, FragEntry, FragVia, toEpoch } from './debugLog';
+import { watchRealSeeks } from './seekFilter';
 
 const fragKey = (frag: Fragment) => `${frag.type}:${frag.level}:${frag.sn}`;
 
@@ -19,9 +22,83 @@ function applyStats(entry: FragEntry, stats: LoaderStats | undefined) {
   entry.aborted = entry.aborted || stats.aborted;
 }
 
-export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: string): () => void {
+const VIA: Record<ClaimKind, FragVia | null> = { hit: 'cache hit', join: 'joined prefetch', miss: null };
+
+export function attachHlsDebug(
+  hls: Hls,
+  media: HTMLMediaElement,
+  sourceUrl: string,
+  prefetch?: PrefetchController | null,
+): () => void {
   const session = debugLog.startSession(sourceUrl);
   const open = new Map<string, { entry: FragEntry; frag: Fragment }>();
+  // The loader claims a fragment (cache hit / joined / miss) just before hls.js fires FRAG_LOADING for it.
+  const pendingVia = new Map<string, FragVia | null>();
+  // Rows of background prefetches, by URL: running ones, and recent ones (to mark them used).
+  const prefetchRows = new Map<string, FragEntry>();
+
+  const newFragEntry = (fields: Pick<FragEntry, 'at' | 'sn' | 'level' | 'fragType' | 'duration' | 'url' | 'attempt'>) =>
+    debugLog.addFrag({
+      ...fields,
+      status: 'loading',
+      requestStart: null,
+      firstByte: null,
+      end: null,
+      ttfbMs: null,
+      loadMs: null,
+      bytes: null,
+      retries: 0,
+      aborted: false,
+      httpStatus: null,
+      error: null,
+      via: null,
+    });
+
+  const onPrefetch = (e: PrefetchEvent) => {
+    if (e.type === 'claim') {
+      const via = VIA[e.how];
+      pendingVia.set(e.url, via);
+      if (pendingVia.size > 200) pendingVia.clear();
+      const row = prefetchRows.get(e.url);
+      if (row && via) {
+        row.via = 'prefetch (used)';
+        debugLog.touch();
+      }
+      return;
+    }
+    if (!e.speculative) return; // hls.js's own request: its FRAG_LOADING row covers it
+    if (e.type === 'fetch-start') {
+      const duration = hls.levels[e.level]?.details?.fragments.find((f) => f.sn === e.sn)?.duration ?? 0;
+      const row = newFragEntry({
+        at: Date.now(),
+        sn: e.sn,
+        level: e.level,
+        fragType: 'prefetch',
+        duration,
+        url: e.url,
+        attempt: 1,
+      });
+      row.via = 'prefetch';
+      row.requestStart = toEpoch(e.at);
+      prefetchRows.set(e.url, row);
+      if (prefetchRows.size > 200) prefetchRows.delete(prefetchRows.keys().next().value as string);
+      return;
+    }
+    const row = prefetchRows.get(e.url);
+    if (!row || row.status !== 'loading') return;
+    row.requestStart = toEpoch(e.startedAt);
+    row.firstByte = e.firstAt !== null ? toEpoch(e.firstAt) : null;
+    row.end = toEpoch(e.endAt);
+    row.ttfbMs = e.firstAt !== null ? e.firstAt - e.startedAt : null;
+    row.loadMs = e.endAt - e.startedAt;
+    row.bytes = e.bytes || null;
+    row.httpStatus = e.httpStatus;
+    row.status = e.outcome;
+    row.aborted = e.outcome === 'aborted';
+    row.error = e.outcome === 'aborted' ? `cancelled (${e.reason})` : e.error;
+    debugLog.touch();
+  };
+  const unsubscribePrefetch = prefetch?.subscribe(onPrefetch);
 
   // hls.js aborts loads silently on seek, pause (stopLoad) and level switches; close those rows.
   const sweep = () => {
@@ -50,7 +127,7 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
     const attempt = (attempts.get(key) ?? 0) + 1;
     attempts.set(key, attempt);
     if (attempts.size > 5000) attempts.clear();
-    const entry = debugLog.addFrag({
+    const entry = newFragEntry({
       at: Date.now(),
       sn: frag.sn,
       level: frag.level,
@@ -58,18 +135,11 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
       duration: frag.duration,
       url: frag.url,
       attempt,
-      status: 'loading',
-      requestStart: null,
-      firstByte: null,
-      end: null,
-      ttfbMs: null,
-      loadMs: null,
-      bytes: null,
-      retries: 0,
-      aborted: false,
-      httpStatus: null,
-      error: null,
     });
+    if (pendingVia.has(frag.url)) {
+      entry.via = pendingVia.get(frag.url) ?? null;
+      pendingVia.delete(frag.url);
+    }
     open.set(key, { entry, frag });
   };
 
@@ -159,7 +229,8 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
     session.seekTarget = null;
   };
 
-  const onSeeking = () => {
+  // Only real seeks count (a user scrub, a script setting currentTime); hls.js's own nudges and gap jumps don't.
+  const onRealSeek = (to: number, from: number) => {
     if (session.seekStartedAt !== null) {
       session.seeksSuperseded++;
       debugLog.marker(
@@ -168,9 +239,17 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
     }
     session.seeks++;
     session.seekStartedAt = Date.now();
-    session.seekTarget = media.currentTime;
-    debugLog.marker(`seek → ${media.currentTime.toFixed(1)}s (from ${lastTime.toFixed(1)}s)`);
+    session.seekTarget = to;
+    debugLog.marker(`seek → ${to.toFixed(1)}s (from ${from.toFixed(1)}s)`);
   };
+  const onIgnoredSeek = (reason: string, to: number, from: number) => {
+    session.seeksIgnored++;
+    // Larger hls.js jumps are worth a line; the 1 µs flushes and 0.1 s nudges are not.
+    if (Math.abs(to - from) >= 0.5)
+      debugLog.marker(`hls.js moved playhead ${from.toFixed(1)}s → ${to.toFixed(1)}s (${reason})`);
+    else debugLog.touch();
+  };
+  const detachSeeks = watchRealSeeks(hls, media, onRealSeek, onIgnoredSeek);
 
   const onTimeUpdate = () => {
     if (session.stallStartedAt !== null && media.currentTime > lastTime + 0.1) endStall();
@@ -189,9 +268,8 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
   media.addEventListener('playing', onPlaying);
   media.addEventListener('ratechange', onPlaying);
   media.addEventListener('timeupdate', onTimeUpdate);
-  media.addEventListener('seeking', onSeeking);
   // Lets scripted runs (Playwright) read the log and hook hls.js events. Debug builds only.
-  (window as unknown as { __msrsDebug?: unknown }).__msrsDebug = { hls, media, log: debugLog };
+  (window as unknown as { __msrsDebug?: unknown }).__msrsDebug = { hls, media, log: debugLog, prefetch };
 
   return () => {
     clearInterval(sweepTimer);
@@ -205,7 +283,15 @@ export function attachHlsDebug(hls: Hls, media: HTMLMediaElement, sourceUrl: str
     media.removeEventListener('playing', onPlaying);
     media.removeEventListener('ratechange', onPlaying);
     media.removeEventListener('timeupdate', onTimeUpdate);
-    media.removeEventListener('seeking', onSeeking);
+    detachSeeks();
+    unsubscribePrefetch?.();
+    for (const row of prefetchRows.values()) {
+      if (row.status === 'loading') {
+        row.status = 'aborted';
+        row.aborted = true;
+        row.error = 'player destroyed';
+      }
+    }
     // Requests still open when the player goes away will never complete.
     for (const { entry } of open.values()) {
       entry.status = 'aborted';
